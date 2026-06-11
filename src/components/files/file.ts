@@ -1,0 +1,99 @@
+import { BaseDirectory, basename, join } from "@tauri-apps/api/path";
+import { type DirEntry, exists, readDir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { z } from "zod";
+import { commands } from "@/bindings";
+import { unwrap } from "@/utils/unwrap";
+
+const fileTypeSchema = z.enum(["repertoire", "game", "tournament", "puzzle", "other"]);
+
+export type FileType = z.infer<typeof fileTypeSchema>;
+
+const fileInfoMetadataSchema = z.object({
+    type: fileTypeSchema,
+    tags: z.array(z.string()),
+});
+
+export type FileInfoMetadata = z.infer<typeof fileInfoMetadataSchema>;
+
+export const fileMetadataSchema = z.object({
+    type: z.literal("file"),
+    name: z.string(),
+    path: z.string(),
+    numGames: z.number(),
+    metadata: fileInfoMetadataSchema,
+    lastModified: z.number(),
+});
+
+export type FileMetadata = z.infer<typeof fileMetadataSchema>;
+
+export type FileData = {
+    metadata: FileInfoMetadata;
+    games: string[];
+};
+
+const NOTATION_FILE_REGEX = /\.(pgn|xqf|cbl|wxf|txt)$/i;
+
+function metadataPathFor(path: string): string {
+    return path.replace(NOTATION_FILE_REGEX, ".info");
+}
+
+async function readFileMetadata(path: string): Promise<FileMetadata | null> {
+    if (!NOTATION_FILE_REGEX.test(path)) {
+        return null;
+    }
+    const metadataPath = metadataPathFor(path);
+    let metadata: FileInfoMetadata;
+    if (await exists(metadataPath)) {
+        metadata = JSON.parse(await readTextFile(metadataPath));
+    } else {
+        metadata = {
+            type: "other",
+            tags: [],
+        };
+        await writeTextFile(metadataPath, JSON.stringify(metadata));
+    }
+    const fileMetadata = unwrap(await commands.getFileMetadata(path));
+    const fileName = await basename(path);
+    return {
+        type: "file",
+        path,
+        name: fileName.replace(NOTATION_FILE_REGEX, ""),
+        numGames: 1,
+        metadata,
+        lastModified: fileMetadata.last_modified,
+    };
+}
+
+export type Directory = {
+    type: "directory";
+    children: (FileMetadata | Directory)[];
+    path: string;
+    name: string;
+};
+
+export async function processEntriesRecursively(parent: string, entries: DirEntry[]) {
+    const processedEntries = await Promise.all(
+        entries.map(async (entry) => {
+            if (entry.isFile) {
+                return await readFileMetadata(await join(parent, entry.name));
+            }
+            if (entry.isDirectory) {
+                const dir = await join(parent, entry.name);
+                const newEntries = await processEntriesRecursively(
+                    dir,
+                    await readDir(dir, { baseDir: BaseDirectory.AppLocalData }),
+                );
+                const directory: Directory = {
+                    type: "directory",
+                    name: entry.name,
+                    path: dir,
+                    children: newEntries,
+                };
+                return directory;
+            }
+            return null;
+        }),
+    );
+
+    return processedEntries.filter((entry): entry is FileMetadata | Directory => entry !== null);
+}

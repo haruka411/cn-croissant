@@ -1,0 +1,48 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+coverage
+dist
+dist-ssr
+*.local
+.next
+*.tsbuildinfo
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+src-tauri/gen/
+src-tauri/.tauri/
+
+# Local engine binaries and neural network weights
+engine/**/*.nnue
+engine/**/*.exe
+engine/**/*.dll
+engine/**/*.so
+engine/**/*.dylib
+!engine/pikafish/
+!engine/pikafish/**
+
+# Local reference copy and bundled upstream sources
+en-croissant-master/
+
+# Local environment
+.env
+.env.*
+!.env.example
+Thumbs.db

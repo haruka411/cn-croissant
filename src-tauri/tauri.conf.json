@@ -1,0 +1,82 @@
+{
+  "bundle": {
+    "active": true,
+    "category": "BoardGame",
+    "copyright": "",
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {
+        "depends": []
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    },
+    "publisher": "cn-croissant contributors",
+    "shortDescription": "Modern Xiangqi Toolkit",
+    "longDescription": "",
+    "macOS": {
+      "entitlements": null,
+      "exceptionDomain": "",
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": "-"
+    },
+    "resources": {
+      "../sound/": "sound/",
+      "../engine/pikafish/": "engine/pikafish/"
+    },
+    "targets": "all",
+    "createUpdaterArtifacts": "v1Compatible"
+  },
+  "build": {
+    "beforeDevCommand": "pnpm start-vite",
+    "beforeBuildCommand": "pnpm build-vite",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "productName": "cn-croissant",
+  "mainBinaryName": "cn-croissant",
+  "identifier": "org.cncroissant.desktop",
+  "plugins": {
+    "cli": {
+      "args": [
+        {
+          "name": "file",
+          "index": 1,
+          "takesValue": true
+        }
+      ]
+    }
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "cn-croissant",
+        "visible": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "assetProtocol": {
+        "scope": [
+          "**"
+        ],
+        "enable": true
+      },
+      "csp": null
+    }
+  }
+}
