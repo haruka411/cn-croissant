@@ -55,6 +55,7 @@ import {
 } from "@/state/atoms";
 import { keyMapAtom } from "@/state/keybinds";
 import FileInput from "../common/FileInput";
+import AppFontSelect from "./AppFontSelect";
 import BoardSelect from "./BoardSelect";
 import ColorControl from "./ColorControl";
 import FontSizeSlider from "./FontSizeSlider";
@@ -108,7 +109,7 @@ function SettingRow({
     <Group justify="space-between" wrap="nowrap" gap="xl" className={classes.item}>
       <div>
         <Text>{title}</Text>
-        <Text size="xs" c="dimmed">
+        <Text size="sm" c="dimmed">
           {description}
         </Text>
       </div>
@@ -380,6 +381,14 @@ export default function Page() {
         render: () => <FontSizeSlider />,
       },
       {
+        id: "app-font",
+        category: "appearance",
+        title: t("Settings.Appearance.AppFont"),
+        description: t("Settings.Appearance.AppFont.Desc"),
+        keywords: ["font", "family", "font family", "ui"],
+        render: () => <AppFontSelect />,
+      },
+      {
         id: "piece-set",
         category: "appearance",
         title: isChinese ? "棋子样式" : "Xiangqi Pieces",
@@ -618,7 +627,7 @@ export default function Page() {
             <div key={category}>
               <Group gap="xs" mt="md" mb="xs">
                 {categoryInfo[category].icon}
-                <Text fw={500} size="sm" c="dimmed">
+                <Text fw={600} size="sm" c="dimmed">
                   {categoryInfo[category].title}
                 </Text>
               </Group>
@@ -668,7 +677,7 @@ export default function Page() {
       {filteredSettings ? (
         <ScrollArea flex={1} px="md">
           {renderSearchResults()}
-          <Text size="xs" c="dimmed" ta="right" py="md">
+          <Text size="sm" c="dimmed" ta="right" py="md">
             Cn Croissant v{version}
           </Text>
         </ScrollArea>
@@ -704,7 +713,7 @@ export default function Page() {
                             </ActionIcon>
                           </Tooltip>
                         </Group>
-                        <Text size="xs" c="dimmed" mt={3} mb="lg">
+                        <Text size="sm" c="dimmed" mt={3} mb="lg">
                           {categoryInfo[category].description}
                         </Text>
                         <Table>
@@ -731,7 +740,7 @@ export default function Page() {
                         <Text size="lg" fw={500} className={classes.title}>
                           {categoryInfo[category].title}
                         </Text>
-                        <Text size="xs" c="dimmed" mt={3} mb="lg">
+                        <Text size="sm" c="dimmed" mt={3} mb="lg">
                           {categoryInfo[category].description}
                         </Text>
                         {renderCategorySettings(category)}
@@ -741,7 +750,7 @@ export default function Page() {
                 ))}
               </Card>
             </ScrollArea>
-            <Text size="xs" c="dimmed" ta="right">
+            <Text size="sm" c="dimmed" ta="right">
               Cn Croissant v{version}
             </Text>
           </Stack>

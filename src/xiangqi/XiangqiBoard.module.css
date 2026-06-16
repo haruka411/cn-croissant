@@ -1,6 +1,6 @@
 .boardWrap {
-  width: min(72vh, 100%);
-  max-width: 720px;
+  width: 100%;
+  max-width: 100%;
   aspect-ratio: 9 / 10;
   position: relative;
   user-select: none;
@@ -17,6 +17,10 @@
   --piece-border: #5a2f12;
   --black-piece: #20242a;
   --red-piece: #b42124;
+  --piece-text-scale: 1;
+  --piece-inner-size: 80%;
+  --piece-inner-inset: 10%;
+  --piece-accent: var(--red-piece);
   --grid-pad-x: 8%;
   --grid-pad-y: 7%;
   --grid-width: 84%;
@@ -37,6 +41,18 @@
     inset 0 0 0 2px color-mix(in srgb, var(--board-line) 28%, transparent),
     inset 0 0 28px rgba(77, 37, 10, 0.2);
   overflow: hidden;
+}
+
+.pieceSurface {
+  --piece-bg: #f3d197;
+  --piece-bg-deep: #c98c4a;
+  --piece-border: #5a2f12;
+  --black-piece: #20242a;
+  --red-piece: #b42124;
+  --piece-text-scale: 1;
+  --piece-inner-size: 80%;
+  --piece-inner-inset: 10%;
+  --piece-accent: var(--red-piece);
 }
 
 .board::before {
@@ -72,6 +88,84 @@
   --piece-border: #887450;
   --black-piece: #10141a;
   --red-piece: #b8292e;
+}
+
+.board[data-theme="parchment"] {
+  --board-bg: #ead29a;
+  --board-bg-deep: #c39152;
+  --board-line: #57310f;
+  --board-border: #8b5a25;
+  --river-color: #6a3b14;
+  --piece-bg: #f4daa1;
+  --piece-bg-deep: #be8345;
+  --piece-border: #684018;
+  --black-piece: #22211f;
+  --red-piece: #ad2326;
+}
+
+.board[data-theme="walnut"] {
+  --board-bg: #8e5a30;
+  --board-bg-deep: #4e2e1a;
+  --board-line: #f1d8a4;
+  --board-border: #2f1c11;
+  --river-color: #f3d9a3;
+  --piece-bg: #ebc88d;
+  --piece-bg-deep: #9d6732;
+  --piece-border: #3d2413;
+  --black-piece: #101010;
+  --red-piece: #b92326;
+}
+
+.board[data-theme="porcelain"] {
+  --board-bg: #d8e6ef;
+  --board-bg-deep: #7fa8bf;
+  --board-line: #1f4f75;
+  --board-border: #295c82;
+  --river-color: #1b547e;
+  --piece-bg: #f2f5ec;
+  --piece-bg-deep: #9fc0cb;
+  --piece-border: #245980;
+  --black-piece: #143046;
+  --red-piece: #b3262c;
+}
+
+.board[data-theme="slate"] {
+  --board-bg: #7f8581;
+  --board-bg-deep: #4f5654;
+  --board-line: #181f1e;
+  --board-border: #2b3331;
+  --river-color: #182220;
+  --piece-bg: #d9d4c4;
+  --piece-bg-deep: #9e9a8c;
+  --piece-border: #414945;
+  --black-piece: #101514;
+  --red-piece: #aa2528;
+}
+
+.board[data-theme="crystal"] {
+  --board-bg: #fbfeff;
+  --board-bg-deep: #c9f0fb;
+  --board-line: #2c8db5;
+  --board-border: #a9e2f2;
+  --river-color: #2b87ad;
+  --piece-bg: #ffffff;
+  --piece-bg-deep: #c8eef8;
+  --piece-border: #b9edf8;
+  --black-piece: #103043;
+  --red-piece: #be2638;
+  border-color: rgba(176, 234, 248, 0.78);
+  background:
+    linear-gradient(132deg, rgba(255, 255, 255, 0.9), transparent 17% 34%, rgba(255, 255, 255, 0.5) 35% 37%, transparent 38%),
+    linear-gradient(42deg, transparent 0 21%, rgba(255, 255, 255, 0.46) 22% 24%, transparent 25% 63%, rgba(255, 255, 255, 0.28) 64% 66%, transparent 67%),
+    conic-gradient(from 18deg at 18% 18%, rgba(255, 255, 255, 0.7), transparent 15%, rgba(95, 196, 224, 0.12) 26%, transparent 38%, rgba(255, 255, 255, 0.34) 49%, transparent 62%),
+    radial-gradient(circle at 24% 15%, rgba(255, 255, 255, 0.86), transparent 18%),
+    radial-gradient(circle at 78% 82%, rgba(61, 177, 215, 0.14), transparent 28%),
+    linear-gradient(125deg, rgba(255, 255, 255, 0.86), rgba(201, 240, 251, 0.66));
+  box-shadow:
+    0 16px 38px rgba(38, 127, 164, 0.24),
+    inset 0 0 0 2px rgba(255, 255, 255, 0.72),
+    inset 0 0 0 6px rgba(255, 255, 255, 0.18),
+    inset 0 0 34px rgba(78, 190, 224, 0.16);
 }
 
 .gridSvg {
@@ -143,14 +237,59 @@
   display: grid;
   place-items: center;
   font-family: "KaiTi", "STKaiti", "SimSun", serif;
-  font-size: clamp(0.64rem, 4.6cqw, 1.9rem);
+  font-size: clamp(0.64rem, calc(4.6cqw * var(--piece-text-scale)), 2.95rem);
   font-weight: 900;
   line-height: 1;
   cursor: pointer;
   z-index: 5;
 }
 
-.board[data-piece-style="seal"] .piece {
+.piece::before {
+  content: "";
+  position: absolute;
+  inset: var(--piece-inner-inset);
+  border-radius: inherit;
+  pointer-events: none;
+  border: 1.45px solid color-mix(in srgb, var(--piece-accent) 58%, #7b4318);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.18), transparent 46%),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 66%,
+      rgba(112, 71, 32, 0.2) 67% 71%,
+      transparent 72%
+    );
+  box-shadow:
+    inset 0 1px 1px rgba(255, 246, 210, 0.42),
+    inset 0 -1px 2px rgba(83, 42, 13, 0.2);
+  opacity: 0.92;
+}
+
+.board[data-piece-inner-ring="hide"] .piece::before,
+.pieceSurface[data-piece-inner-ring="hide"] .piece::before {
+  display: none;
+}
+
+.board[data-piece-style="classic"] .piece::before,
+.pieceSurface[data-piece-style="classic"] .piece::before {
+  border: 1.45px solid color-mix(in srgb, var(--piece-accent) 54%, #8a531f);
+  background:
+    radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.28), transparent 22%),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 61%,
+      rgba(118, 70, 27, 0.22) 62% 66%,
+      rgba(255, 241, 208, 0.4) 66% 70%,
+      rgba(118, 70, 27, 0.14) 70% 74%,
+      transparent 75%
+    );
+  box-shadow:
+    inset 0 1px 1px rgba(255, 247, 217, 0.45),
+    inset 0 -2px 3px rgba(92, 53, 19, 0.18);
+}
+
+.board[data-piece-style="seal"] .piece,
+.pieceSurface[data-piece-style="seal"] .piece {
   font-family: "STSong", "SimSun", serif;
   background:
     radial-gradient(
@@ -161,44 +300,349 @@
     radial-gradient(circle at 50% 56%, var(--piece-bg) 0 58%, var(--piece-bg-deep) 100%);
 }
 
-.board[data-piece-style="seal"] .piece::before {
-  inset: 13%;
-  border-width: 2px;
+.board[data-piece-style="seal"] .piece::before,
+.pieceSurface[data-piece-style="seal"] .piece::before {
+  inset: calc(var(--piece-inner-inset) + 3%);
+  border: 1.9px solid color-mix(in srgb, var(--piece-accent) 64%, #6b3715);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 248, 220, 0.34), transparent 45%),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 62%,
+      rgba(93, 50, 18, 0.22) 63% 67%,
+      rgba(255, 237, 199, 0.44) 67% 71%,
+      transparent 72%
+    );
+  box-shadow:
+    inset 0 1px 1px rgba(255, 238, 192, 0.32),
+    inset 0 -1px 2px rgba(91, 48, 18, 0.18);
 }
 
-.board[data-piece-style="plain"] .piece {
+.board[data-piece-style="plain"] .piece,
+.pieceSurface[data-piece-style="plain"] .piece {
   background: var(--piece-bg);
   box-shadow:
     0 3px 8px rgba(0, 0, 0, 0.26),
     inset 0 0 0 2px color-mix(in srgb, white 28%, transparent);
 }
 
-.board[data-piece-style="plain"] .piece::after {
+.board[data-piece-style="plain"] .piece::before,
+.pieceSurface[data-piece-style="plain"] .piece::before {
   display: none;
 }
 
-.piece::before,
-.piece::after {
+.board[data-piece-style="paper"] .piece,
+.pieceSurface[data-piece-style="paper"] .piece {
+  background:
+    radial-gradient(circle at 48% 45%, rgba(255, 250, 232, 0.82), transparent 48%),
+    linear-gradient(145deg, #f7e5b8, #d5a96b);
+  border-color: #6b3d19;
+  box-shadow:
+    0 4px 9px rgba(61, 35, 13, 0.28),
+    inset 0 0 0 3px rgba(255, 246, 215, 0.32),
+    inset 0 -3px 6px rgba(104, 55, 17, 0.2);
+}
+
+.board[data-piece-style="paper"] .piece::before,
+.pieceSurface[data-piece-style="paper"] .piece::before {
+  inset: var(--piece-inner-inset);
+  border: 1.2px solid color-mix(in srgb, var(--piece-accent) 58%, rgba(105, 61, 25, 0.42));
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--piece-accent) 18%, rgba(255, 248, 220, 0.3)), transparent 50%),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 64%,
+      color-mix(in srgb, var(--piece-accent) 22%, rgba(132, 82, 35, 0.18)) 65% 69%,
+      rgba(255, 248, 218, 0.32) 69% 72%,
+      transparent 73%
+    );
+  box-shadow:
+    0 0 0 1px rgba(255, 248, 218, 0.22),
+    inset 0 0 5px rgba(255, 246, 214, 0.22);
+}
+
+.board[data-piece-style="jade"] .piece,
+.pieceSurface[data-piece-style="jade"] .piece {
+  --piece-bg: #e6f0d8;
+  --piece-bg-deep: #9fc39e;
+  --piece-border: #42694e;
+  background:
+    radial-gradient(circle at 33% 27%, rgba(255, 255, 255, 0.68), transparent 22%),
+    radial-gradient(circle at 64% 74%, rgba(82, 138, 88, 0.18), transparent 28%),
+    radial-gradient(circle at 48% 52%, #eaf5dc 0 50%, #9fc39e 100%);
+  box-shadow:
+    0 5px 11px rgba(18, 45, 32, 0.3),
+    inset 0 2px 3px rgba(255, 255, 255, 0.52),
+    inset 0 -4px 8px rgba(33, 84, 55, 0.28);
+}
+
+.board[data-piece-style="jade"] .piece::before,
+.pieceSurface[data-piece-style="jade"] .piece::before {
+  inset: var(--piece-inner-inset);
+  border: 1px solid color-mix(in srgb, var(--piece-accent) 54%, rgba(55, 91, 62, 0.38));
+  background:
+    radial-gradient(circle at 28% 22%, color-mix(in srgb, var(--piece-accent) 12%, rgba(255, 255, 255, 0.36)), transparent 22%),
+    linear-gradient(145deg, rgba(255, 255, 245, 0.2), color-mix(in srgb, var(--piece-accent) 15%, rgba(84, 139, 92, 0.08))),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 65%,
+      color-mix(in srgb, var(--piece-accent) 18%, rgba(72, 119, 80, 0.2)) 66% 70%,
+      rgba(255, 255, 245, 0.22) 70% 73%,
+      transparent 74%
+    );
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 245, 0.34),
+    inset 0 -2px 4px rgba(51, 101, 61, 0.14);
+}
+
+.board[data-piece-style="flat"] .piece,
+.pieceSurface[data-piece-style="flat"] .piece {
+  background: #f1d095;
+  border: 2px solid color-mix(in srgb, var(--piece-border) 92%, black);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.24);
+}
+
+.board[data-piece-style="flat"] .piece::before,
+.pieceSurface[data-piece-style="flat"] .piece::before {
+  inset: var(--piece-inner-inset);
+  border: 2px solid color-mix(in srgb, var(--piece-accent) 62%, #6d3c18);
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--piece-accent) 10%, rgba(255, 244, 208, 0.14)), transparent 46%),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 66%,
+      color-mix(in srgb, var(--piece-accent) 30%, rgba(109, 60, 24, 0.18)) 67% 71%,
+      transparent 72%
+    );
+  box-shadow: none;
+  opacity: 0.84;
+}
+
+.board[data-piece-style="porcelain"] .piece,
+.pieceSurface[data-piece-style="porcelain"] .piece {
+  --piece-bg: #f7f8f0;
+  --piece-bg-deep: #aac9d8;
+  --piece-border: #2a628c;
+  background:
+    radial-gradient(circle at 34% 25%, rgba(255, 255, 255, 0.9), transparent 24%),
+    conic-gradient(
+      from 35deg,
+      rgba(42, 98, 140, 0.1),
+      transparent 18%,
+      rgba(42, 98, 140, 0.12) 24%,
+      transparent 34%,
+      rgba(42, 98, 140, 0.08) 48%,
+      transparent 65%
+    ),
+    radial-gradient(circle at 48% 52%, #f8f8ef 0 54%, #9fc1d1 100%);
+  border-color: #2a628c;
+  box-shadow:
+    0 5px 10px rgba(18, 47, 68, 0.24),
+    inset 0 2px 4px rgba(255, 255, 255, 0.66),
+    inset 0 -4px 8px rgba(46, 93, 125, 0.24);
+}
+
+.board[data-piece-style="porcelain"] .piece::before,
+.pieceSurface[data-piece-style="porcelain"] .piece::before {
+  inset: var(--piece-inner-inset);
+  border: 1.4px solid color-mix(in srgb, var(--piece-accent) 58%, rgba(42, 98, 140, 0.62));
+  background:
+    radial-gradient(circle at 34% 28%, color-mix(in srgb, var(--piece-accent) 10%, rgba(255, 255, 255, 0.42)), transparent 24%),
+    conic-gradient(
+      from 20deg,
+      color-mix(in srgb, var(--piece-accent) 18%, rgba(42, 98, 140, 0.08)),
+      transparent 18%,
+      color-mix(in srgb, var(--piece-accent) 22%, rgba(42, 98, 140, 0.18)) 24%,
+      transparent 36%,
+      color-mix(in srgb, var(--piece-accent) 16%, rgba(42, 98, 140, 0.1)) 52%,
+      transparent 72%
+    ),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 64%,
+      color-mix(in srgb, var(--piece-accent) 24%, rgba(42, 98, 140, 0.2)) 65% 69%,
+      rgba(255, 255, 255, 0.24) 69% 72%,
+      transparent 73%
+    );
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.42),
+    inset 0 0 4px rgba(255, 255, 255, 0.34);
+}
+
+.board[data-piece-style="lacquer"] .piece,
+.pieceSurface[data-piece-style="lacquer"] .piece {
+  --piece-bg: #f2c579;
+  --piece-bg-deep: #7a241f;
+  --piece-border: #521713;
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255, 236, 176, 0.78), transparent 22%),
+    radial-gradient(circle at 50% 54%, #f0c474 0 50%, #8b2a22 100%);
+  border-color: #5a1914;
+  box-shadow:
+    0 6px 11px rgba(45, 16, 12, 0.36),
+    inset 0 2px 3px rgba(255, 229, 164, 0.5),
+    inset 0 -4px 8px rgba(59, 14, 11, 0.36);
+}
+
+.board[data-piece-style="lacquer"] .piece::before,
+.pieceSurface[data-piece-style="lacquer"] .piece::before {
+  inset: var(--piece-inner-inset);
+  border: 1.5px solid color-mix(in srgb, var(--piece-accent) 64%, rgba(95, 25, 19, 0.62));
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--piece-accent) 18%, rgba(255, 224, 146, 0.18)), transparent 44%),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 63%,
+      color-mix(in srgb, var(--piece-accent) 24%, rgba(95, 25, 19, 0.26)) 64% 68%,
+      rgba(255, 224, 146, 0.28) 68% 72%,
+      transparent 73%
+    );
+  box-shadow:
+    0 0 0 1px rgba(255, 222, 142, 0.3),
+    inset 0 0 5px rgba(255, 224, 146, 0.18);
+}
+
+.board[data-piece-style="stone"] .piece,
+.pieceSurface[data-piece-style="stone"] .piece {
+  --piece-bg: #ded8c8;
+  --piece-bg-deep: #8b8c84;
+  --piece-border: #4d524d;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 245, 0.54), transparent 22%),
+    radial-gradient(circle at 74% 70%, rgba(74, 77, 72, 0.18), transparent 18%),
+    radial-gradient(circle at 48% 52%, #ded8c8 0 52%, #8b8c84 100%);
+  border-color: #4d524d;
+  box-shadow:
+    0 4px 9px rgba(30, 35, 32, 0.28),
+    inset 0 2px 3px rgba(255, 255, 245, 0.38),
+    inset 0 -4px 7px rgba(59, 62, 58, 0.26);
+}
+
+.board[data-piece-style="stone"] .piece::before,
+.pieceSurface[data-piece-style="stone"] .piece::before {
+  inset: var(--piece-inner-inset);
+  border: 1.2px solid color-mix(in srgb, var(--piece-accent) 52%, rgba(72, 78, 72, 0.46));
+  background:
+    radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--piece-accent) 8%, rgba(255, 255, 245, 0.22)), transparent 20%),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 63%,
+      color-mix(in srgb, var(--piece-accent) 18%, rgba(72, 78, 72, 0.2)) 64% 68%,
+      rgba(255, 255, 245, 0.24) 68% 72%,
+      transparent 73%
+    );
+  box-shadow:
+    inset 0 1px 2px rgba(255, 255, 245, 0.18),
+    inset 0 -1px 2px rgba(53, 58, 54, 0.18);
+}
+
+.board[data-piece-style="bamboo"] .piece,
+.pieceSurface[data-piece-style="bamboo"] .piece {
+  --piece-bg: #f0dc99;
+  --piece-bg-deep: #9bb15d;
+  --piece-border: #5e6e2f;
+  background:
+    linear-gradient(110deg, rgba(255, 255, 230, 0.35), transparent 28%),
+    radial-gradient(circle at 48% 54%, #f0dc99 0 54%, #9bb15d 100%);
+  border-color: #637533;
+  box-shadow:
+    0 4px 9px rgba(49, 61, 24, 0.28),
+    inset 0 2px 3px rgba(255, 255, 230, 0.48),
+    inset 0 -4px 7px rgba(85, 101, 43, 0.28);
+}
+
+.board[data-piece-style="bamboo"] .piece::before,
+.pieceSurface[data-piece-style="bamboo"] .piece::before {
+  inset: var(--piece-inner-inset);
+  border: 1.2px solid color-mix(in srgb, var(--piece-accent) 50%, rgba(87, 103, 45, 0.5));
+  background:
+    linear-gradient(90deg, transparent 23%, color-mix(in srgb, var(--piece-accent) 12%, rgba(255, 255, 225, 0.18)) 26% 28%, transparent 32%),
+    linear-gradient(90deg, transparent 62%, color-mix(in srgb, var(--piece-accent) 14%, rgba(92, 107, 48, 0.18)) 64% 66%, transparent 70%),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 65%,
+      color-mix(in srgb, var(--piece-accent) 18%, rgba(86, 101, 43, 0.2)) 66% 70%,
+      transparent 71%
+    );
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 220, 0.2),
+    inset 0 -2px 3px rgba(91, 106, 47, 0.16);
+}
+
+.board[data-piece-style="crystal"] .piece,
+.pieceSurface[data-piece-style="crystal"] .piece {
+  --piece-bg: #ffffff;
+  --piece-bg-deep: #d6f5fc;
+  --piece-border: #c6f4fb;
+  border: 1.35px solid rgba(255, 255, 255, 0.82);
+  background:
+    linear-gradient(132deg, rgba(255, 255, 255, 0.92), transparent 18% 36%, rgba(255, 255, 255, 0.48) 37% 40%, transparent 41%),
+    linear-gradient(44deg, transparent 0 24%, rgba(255, 255, 255, 0.4) 25% 28%, transparent 29% 62%, rgba(78, 189, 222, 0.14) 63% 66%, transparent 67%),
+    conic-gradient(from 12deg at 47% 48%, rgba(255, 255, 255, 0.6), rgba(141, 224, 244, 0.12) 15%, rgba(255, 255, 255, 0.2) 24%, transparent 34%, rgba(255, 255, 255, 0.5) 48%, rgba(93, 193, 224, 0.16) 62%, transparent 77%, rgba(255, 255, 255, 0.54)),
+    radial-gradient(circle at 29% 20%, rgba(255, 255, 255, 0.96), transparent 23%),
+    radial-gradient(circle at 70% 78%, rgba(83, 183, 215, 0.18), transparent 27%),
+    radial-gradient(circle at 50% 55%, rgba(255, 255, 255, 0.72) 0 42%, rgba(214, 245, 252, 0.56) 100%);
+  box-shadow:
+    0 7px 16px rgba(36, 118, 151, 0.22),
+    0 0 16px rgba(206, 247, 255, 0.34),
+    inset 0 2px 5px rgba(255, 255, 255, 0.92),
+    inset 0 -5px 10px rgba(94, 187, 216, 0.14),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.62);
+}
+
+.board[data-piece-style="crystal"] .piece::after,
+.pieceSurface[data-piece-style="crystal"] .piece::after {
   content: "";
   position: absolute;
+  inset: 7%;
+  z-index: 0;
   border-radius: inherit;
   pointer-events: none;
+  background:
+    linear-gradient(126deg, rgba(255, 255, 255, 0.72), transparent 19% 48%, rgba(255, 255, 255, 0.32) 49% 51%, transparent 52%),
+    linear-gradient(58deg, transparent 0 33%, rgba(255, 255, 255, 0.4) 34% 36%, transparent 37% 66%, rgba(105, 207, 235, 0.16) 67% 69%, transparent 70%),
+    conic-gradient(from 28deg, rgba(255, 255, 255, 0.34), transparent 16%, rgba(255, 255, 255, 0.28) 24%, rgba(72, 185, 221, 0.1) 38%, transparent 55%, rgba(255, 255, 255, 0.38) 74%, transparent);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.34),
+    inset 0 0 10px rgba(255, 255, 255, 0.24);
+  opacity: 0.72;
 }
 
-.piece::before {
-  inset: 10%;
-  border: 1.5px solid color-mix(in srgb, currentColor 68%, transparent);
-}
-
-.piece::after {
-  inset: 18%;
-  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+.board[data-piece-style="crystal"] .piece::before,
+.pieceSurface[data-piece-style="crystal"] .piece::before {
+  inset: var(--piece-inner-inset);
+  z-index: 1;
+  border: 1.15px solid color-mix(in srgb, var(--piece-accent) 48%, rgba(255, 255, 255, 0.64));
+  background:
+    linear-gradient(140deg, rgba(255, 255, 255, 0.58), transparent 22% 42%, rgba(255, 255, 255, 0.28) 43% 46%, transparent 47%),
+    conic-gradient(
+      from 30deg,
+      color-mix(in srgb, var(--piece-accent) 16%, rgba(255, 255, 255, 0.3)),
+      transparent 18%,
+      rgba(255, 255, 255, 0.38) 22% 28%,
+      transparent 34%,
+      color-mix(in srgb, var(--piece-accent) 14%, rgba(83, 169, 204, 0.12)) 50%,
+      transparent 72%
+    ),
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 62%,
+      color-mix(in srgb, var(--piece-accent) 24%, rgba(255, 255, 255, 0.22)) 63% 67%,
+      rgba(255, 255, 255, 0.44) 67% 71%,
+      transparent 72%
+    );
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.52),
+    0 0 8px rgba(210, 248, 255, 0.28),
+    inset 0 1px 4px rgba(255, 255, 255, 0.5),
+    inset 0 -2px 4px rgba(77, 164, 201, 0.1);
+  opacity: 0.88;
 }
 
 .pieceText {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: 2;
   display: grid;
   place-items: center;
   overflow: visible;
@@ -210,10 +654,12 @@
 
 .pieceRed {
   color: var(--red-piece);
+  --piece-accent: var(--red-piece);
 }
 
 .pieceBlack {
   color: var(--black-piece);
+  --piece-accent: var(--black-piece);
 }
 
 .selected {

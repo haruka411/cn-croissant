@@ -17,6 +17,9 @@ import {
   showDestsAtom,
   showVariationArrowsAtom,
   snapArrowsAtom,
+  xiangqiPieceInnerScaleAtom,
+  xiangqiPieceInnerRingVisibleAtom,
+  xiangqiPieceTextScaleAtom,
   xiangqiClearDrawingsSignalAtom,
   xiangqiEngineArrowsAtom,
   xiangqiEvaluationAtom,
@@ -39,6 +42,7 @@ import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
 import { playSound } from "@/utils/sound";
 
 const BAR_HEIGHT = "1.9rem";
+const BOARD_GAP = "0.35rem";
 
 interface ChessboardProps {
   editingMode: boolean;
@@ -70,6 +74,9 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const lastMove = currentNode.move ? parseUciMove(currentNode.move) : null;
   const boardTheme = useAtomValue(boardImageAtom);
   const pieceStyle = useAtomValue(pieceSetAtom);
+  const pieceTextScale = useAtomValue(xiangqiPieceTextScaleAtom);
+  const pieceInnerScale = useAtomValue(xiangqiPieceInnerScaleAtom);
+  const pieceInnerRingVisible = useAtomValue(xiangqiPieceInnerRingVisibleAtom);
   const showDests = useAtomValue(showDestsAtom);
   const showLastMove = useAtomValue(moveHighlightAtom);
   const showCoordinates = useAtomValue(showCoordinatesAtom);
@@ -247,11 +254,9 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
           flexDirection: "column",
           width: "100%",
           height: "100%",
-          gap: "0.5rem",
+          gap: BOARD_GAP,
           flexWrap: "nowrap",
           overflow: "hidden",
-          maxWidth:
-            "calc(100vh - 2.25rem - var(--mantine-spacing-sm) - 2.5rem - var(--mantine-spacing-sm) - 1.9rem - 1.9rem + 1.563rem + var(--mantine-spacing-md) - 1rem - 0.2rem)",
         }}
       >
         <BoardBar name={topPlayer} onNameClick={() => {}} height={BAR_HEIGHT}>
@@ -274,9 +279,14 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
         <Group
           style={{
             position: "relative",
+            flex: "1 1 0",
             flexWrap: "nowrap",
+            minHeight: 0,
+            width: "100%",
           }}
           gap="sm"
+          justify="center"
+          align="stretch"
         >
           <Box h="100%" style={{ width: 25 }}>
             <Center h="100%" w="100%">
@@ -326,7 +336,14 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
           <Box
             className={classes.chessboard}
             ref={boardRef}
-            style={{ aspectRatio: "9 / 10", minHeight: 0 }}
+            style={{
+              aspectRatio: "9 / 10",
+              flex: "0 1 auto",
+              height: "100%",
+              maxHeight: "100%",
+              maxWidth: "calc(100% - 25px - var(--mantine-spacing-sm))",
+              minHeight: 0,
+            }}
             onClick={() => {
               if (eraseDrawablesOnClick) clearCurrentNodeShapes();
             }}
@@ -342,6 +359,9 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
                 orientation={orientation}
                 boardTheme={boardTheme}
                 pieceStyle={pieceStyle}
+                pieceTextScale={pieceTextScale}
+                pieceInnerScale={pieceInnerScale}
+                pieceInnerRingVisible={pieceInnerRingVisible[pieceStyle] ?? true}
                 showDests={showDests}
                 showLastMove={showLastMove}
                 showCoordinates={showCoordinates}

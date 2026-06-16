@@ -167,6 +167,8 @@ export const fontSizeAtom = atomWithStorage(
     "font-size",
     Number.parseInt(document.documentElement.style.fontSize) || 100,
 );
+export type AppFontFamily = "system" | "microsoft-yahei" | "simhei" | "simsun" | "kaiti" | "serif";
+export const appFontFamilyAtom = atomWithStorage<AppFontFamily>("app-font-family", "system");
 
 export const moveNotationTypeAtom = atomWithStorage<"letters" | "symbols">("letters", "symbols");
 export const moveMethodAtom = atomWithStorage<"drag" | "select" | "both">("move-method", "both");
@@ -218,10 +220,36 @@ export const soundVolumeAtom = atomWithStorage<number>("sound-volume", 0.8, unde
     getOnInit: true,
 });
 
-export type XiangqiPieceStyle = "classic" | "seal" | "plain";
-export type XiangqiBoardTheme = "classic" | "jade" | "dark";
+export type XiangqiPieceStyle =
+    | "classic"
+    | "seal"
+    | "plain"
+    | "paper"
+    | "jade"
+    | "flat"
+    | "porcelain"
+    | "lacquer"
+    | "stone"
+    | "bamboo"
+    | "crystal";
+export type XiangqiBoardTheme =
+    | "classic"
+    | "jade"
+    | "dark"
+    | "parchment"
+    | "walnut"
+    | "porcelain"
+    | "slate"
+    | "crystal";
 
 export const pieceSetAtom = atomWithStorage<XiangqiPieceStyle>("piece-set", "classic");
+export const xiangqiPieceTextScaleAtom = atomWithStorage<number>("xiangqi-piece-text-scale", 100);
+export const xiangqiPieceInnerScaleAtom = atomWithStorage<number>("xiangqi-piece-inner-scale", 80);
+export type XiangqiPieceInnerRingVisibility = Partial<Record<XiangqiPieceStyle, boolean>>;
+export const xiangqiPieceInnerRingVisibleAtom = atomWithStorage<XiangqiPieceInnerRingVisibility>(
+    "xiangqi-piece-inner-ring-visible",
+    {},
+);
 export const boardImageAtom = atomWithStorage<XiangqiBoardTheme>("board-image", "classic");
 export const primaryColorAtom = atomWithStorage<MantineColor>("mantine-primary-color", "red");
 export const sessionsAtom = atomWithStorage<Session[]>("sessions", []);

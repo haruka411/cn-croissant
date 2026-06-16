@@ -1,6 +1,6 @@
 # cn-croissant
 
-中文 | [English](./README.en.md) 
+中文 | [English](./README.en.md)
 
 cn-croissant 是一个中国象棋的GUI工具，目标是提供棋局管理、棋谱导入导出、引擎分析、对弈和训练相关能力。
 项目基于 [En Croissant](https://github.com/franciscoBSalgueiro/en-croissant) 二次开发。

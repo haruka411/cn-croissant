@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exportGame, makeGameFromNotation, parseGameNotation } from "./notation";
+import { exportGame, formatXiangqiMove, makeGameFromNotation, parseGameNotation } from "./notation";
 import { parseXqfMainline } from "./xqf";
 import {
     createXiangqiStateFromFen,
@@ -109,6 +109,39 @@ describe("xiangqi notation", () => {
         expect(chinese).toContain("1. 炮二平五 马8进7");
         expect(getNodeAtPath(makeGameFromNotation(wxf).root, [0]).move).toBe("h2e2");
         expect(getNodeAtPath(makeGameFromNotation(chinese).root, [0, 0]).move).toBe("h9g7");
+    });
+
+    it("uses front and rear when same pieces share a file", () => {
+        const position = parseFen("4k4/9/9/9/R8/9/R8/9/9/4K4 w - - 0 1");
+
+        expect(formatXiangqiMove(position, parseUciMove("a5b5")!, "chinese")).toBe("前车平八");
+        expect(formatXiangqiMove(position, parseUciMove("a3b3")!, "chinese")).toBe("后车平八");
+    });
+
+    it("uses front middle rear for three pawns on one file", () => {
+        const position = parseFen("4k4/9/9/4P4/4P4/4P4/9/9/9/4K4 w - - 0 1");
+
+        expect(formatXiangqiMove(position, parseUciMove("e6e7")!, "chinese")).toBe("前兵进一");
+        expect(formatXiangqiMove(position, parseUciMove("e5f5")!, "chinese")).toBe("中兵平四");
+        expect(formatXiangqiMove(position, parseUciMove("e4f4")!, "chinese")).toBe("后兵平四");
+    });
+
+    it("uses ordinals for five pawns on one file", () => {
+        const position = parseFen("4k4/9/4P4/4P4/4P4/4P4/4P4/9/9/4K4 w - - 0 1");
+
+        expect(formatXiangqiMove(position, parseUciMove("e7f7")!, "chinese")).toBe("前兵平四");
+        expect(formatXiangqiMove(position, parseUciMove("e6f6")!, "chinese")).toBe("二兵平四");
+        expect(formatXiangqiMove(position, parseUciMove("e5f5")!, "chinese")).toBe("三兵平四");
+        expect(formatXiangqiMove(position, parseUciMove("e4f4")!, "chinese")).toBe("四兵平四");
+        expect(formatXiangqiMove(position, parseUciMove("e3f3")!, "chinese")).toBe("后兵平四");
+    });
+
+    it("parses disambiguated same-file Chinese notation", () => {
+        const parsed = parseGameNotation(
+            `[FEN "4k4/9/4P4/4P4/4P4/4P4/4P4/9/9/4K4 w - - 0 1"]\n\n1. 三兵平四`,
+        );
+
+        expect(getNodeAtPath(parsed.root, [0]).move).toBe("e5f5");
     });
 
     it("creates and persists tab state from notation", () => {

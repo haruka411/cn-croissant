@@ -98,6 +98,7 @@ function formatRelativeMove(
     const origin = coords(move.from);
     const dest = coords(move.to);
     const color = piece.color;
+    const sourceLabel = disambiguatedSourceLabel(position, move.from, piece.role, color, format);
     const forwardDelta = color === "red" ? dest.rank - origin.rank : origin.rank - dest.rank;
     const sourceNumber = fileToNumber(origin.file, color);
     let op: "+" | "-" | "=";
@@ -115,17 +116,98 @@ function formatRelativeMove(
     }
 
     if (format === "wxf") {
-        return `${WXF_ROLE_LABELS[piece.role]}${sourceNumber}${op}${targetNumber}`;
+        return `${sourceLabel ?? `${WXF_ROLE_LABELS[piece.role]}${sourceNumber}`}${op}${targetNumber}`;
     }
 
-    return `${CHINESE_ROLE_LABELS[color][piece.role]}${formatChineseNumber(
-        sourceNumber,
-        color,
-    )}${CHINESE_OP_LABELS[op]}${formatChineseNumber(targetNumber, color)}`;
+    return `${
+        sourceLabel ??
+        `${CHINESE_ROLE_LABELS[color][piece.role]}${formatChineseNumber(sourceNumber, color)}`
+    }${CHINESE_OP_LABELS[op]}${formatChineseNumber(targetNumber, color)}`;
 }
 
 function fileToNumber(file: number, color: XiangqiColor): number {
     return color === "red" ? 9 - file : file + 1;
+}
+
+type RelativeSourceSelector = {
+    kind: "front" | "middle" | "rear" | "ordinal";
+    ordinal?: number;
+};
+
+type SourceGroup = {
+    file: number;
+    squares: Square[];
+};
+
+function disambiguatedSourceLabel(
+    position: XiangqiPosition,
+    from: Square,
+    role: XiangqiRole,
+    color: XiangqiColor,
+    format: Exclude<NotationMoveFormat, "coordinate">,
+): string | null {
+    const groups = ambiguousSourceGroups(position, role, color);
+    const group = groups.find((candidate) => candidate.squares.includes(from));
+    if (!group) return null;
+
+    const index = group.squares.indexOf(from);
+    const selector = sourceSelectorForIndex(index, group.squares.length);
+    if (!selector) return null;
+
+    if (format === "wxf") {
+        const selectorText =
+            selector.kind === "ordinal"
+                ? String(selector.ordinal)
+                : WXF_SELECTOR_LABELS[selector.kind];
+        return `${selectorText}${WXF_ROLE_LABELS[role]}`;
+    }
+
+    const selectorText =
+        selector.kind === "ordinal"
+            ? formatChineseNumber(selector.ordinal ?? index + 1, color)
+            : CHINESE_SELECTOR_LABELS[selector.kind];
+    return `${selectorText}${CHINESE_ROLE_LABELS[color][role]}`;
+}
+
+function ambiguousSourceGroups(
+    position: XiangqiPosition,
+    role: XiangqiRole,
+    color: XiangqiColor,
+): SourceGroup[] {
+    const byFile = new Map<number, Square[]>();
+    for (const [sq, piece] of position.board.entries()) {
+        if (piece.color !== color || piece.role !== role) continue;
+        const file = coords(sq).file;
+        byFile.set(file, [...(byFile.get(file) ?? []), sq]);
+    }
+
+    return [...byFile.entries()]
+        .map(([file, squares]) => ({
+            file,
+            squares: sortFrontToRear(squares, color),
+        }))
+        .filter((group) => group.squares.length > 1);
+}
+
+function sourceSelectorForIndex(index: number, count: number): RelativeSourceSelector | null {
+    if (count <= 1) return null;
+    if (count === 2) return { kind: index === 0 ? "front" : "rear" };
+    if (count === 3) {
+        if (index === 0) return { kind: "front" };
+        if (index === 1) return { kind: "middle" };
+        return { kind: "rear" };
+    }
+    if (index === 0) return { kind: "front" };
+    if (index === count - 1) return { kind: "rear" };
+    return { kind: "ordinal", ordinal: index + 1 };
+}
+
+function sortFrontToRear(squares: Square[], color: XiangqiColor): Square[] {
+    return [...squares].sort((a, b) => {
+        const rankA = coords(a).rank;
+        const rankB = coords(b).rank;
+        return color === "red" ? rankB - rankA : rankA - rankB;
+    });
 }
 
 const WXF_ROLE_LABELS: Record<XiangqiRole, string> = {
@@ -163,6 +245,18 @@ const CHINESE_OP_LABELS: Record<"+" | "-" | "=", string> = {
     "+": "进",
     "-": "退",
     "=": "平",
+};
+
+const CHINESE_SELECTOR_LABELS: Record<"front" | "middle" | "rear", string> = {
+    front: "前",
+    middle: "中",
+    rear: "后",
+};
+
+const WXF_SELECTOR_LABELS: Record<"front" | "middle" | "rear", string> = {
+    front: "+",
+    middle: ".",
+    rear: "-",
 };
 
 const CHINESE_NUMBER_LABELS = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
@@ -367,7 +461,7 @@ function parseRelativeNotationMove(
     const chars = Array.from(token);
     if (chars.length < 4) return null;
 
-    const relativeSelector = parseRelativeSelector(chars[0]);
+    const relativeSelector = parseSourceSelector(chars[0], chars[1]);
     const roleChar = relativeSelector ? chars[1] : chars[0];
     const selector = relativeSelector ? chars[0] : chars[1];
     const op = relativeSelector ? chars[2] : chars[2];
@@ -435,10 +529,13 @@ function parseNumber(char: string): number | null {
     return CHINESE_NUMBERS[char] ?? CHINESE_NUMBERS[normalized] ?? null;
 }
 
-function parseRelativeSelector(char: string): "front" | "middle" | "rear" | null {
-    if (char === "前") return "front";
-    if (char === "中") return "middle";
-    if (char === "后" || char === "後") return "rear";
+function parseSourceSelector(char: string, roleChar: string): RelativeSourceSelector | null {
+    if (!parseRole(roleChar)) return null;
+    if (char === "前") return { kind: "front" };
+    if (char === "中") return { kind: "middle" };
+    if (char === "后" || char === "後") return { kind: "rear" };
+    const ordinal = parseNumber(char);
+    if (ordinal && ordinal >= 2) return { kind: "ordinal", ordinal };
     return null;
 }
 
@@ -448,7 +545,7 @@ function fileNumberToFile(number: number, color: XiangqiColor): number {
 
 function filterByRelativeSelector(
     squares: Square[],
-    selector: "front" | "middle" | "rear",
+    selector: RelativeSourceSelector,
     color: XiangqiColor,
 ): Square[] {
     const byFile = new Map<number, Square[]>();
@@ -460,15 +557,15 @@ function filterByRelativeSelector(
     const result: Square[] = [];
     for (const fileSquares of byFile.values()) {
         if (fileSquares.length <= 1) continue;
-        const sorted = [...fileSquares].sort((a, b) => {
-            const rankA = coords(a).rank;
-            const rankB = coords(b).rank;
-            return color === "red" ? rankB - rankA : rankA - rankB;
-        });
-        if (selector === "front") result.push(sorted[0]);
-        if (selector === "rear") result.push(sorted[sorted.length - 1]);
-        if (selector === "middle" && sorted.length % 2 === 1)
+        const sorted = sortFrontToRear(fileSquares, color);
+        if (selector.kind === "front") result.push(sorted[0]);
+        if (selector.kind === "rear") result.push(sorted[sorted.length - 1]);
+        if (selector.kind === "middle" && sorted.length % 2 === 1)
             result.push(sorted[Math.floor(sorted.length / 2)]);
+        if (selector.kind === "ordinal" && selector.ordinal) {
+            const square = sorted[selector.ordinal - 1];
+            if (square) result.push(square);
+        }
     }
     return result;
 }

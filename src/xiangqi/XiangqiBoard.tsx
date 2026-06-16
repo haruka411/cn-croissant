@@ -1,5 +1,10 @@
 import clsx from "clsx";
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   coords,
   legalDests,
@@ -13,10 +18,36 @@ import {
   type XiangqiPosition,
 } from "./xiangqi";
 import classes from "./XiangqiBoard.module.css";
+import {
+  XIANGQI_PIECE_INNER_SCALE_MAX,
+  XIANGQI_PIECE_INNER_SCALE_MIN,
+  XIANGQI_PIECE_TEXT_SCALE_MAX,
+  XIANGQI_PIECE_TEXT_SCALE_MIN,
+  xiangqiPieceStyleHasInnerRing,
+} from "./pieceStyleOptions";
 
 type Orientation = "red" | "black";
-export type BoardTheme = "classic" | "jade" | "dark";
-export type PieceStyle = "classic" | "seal" | "plain";
+export type BoardTheme =
+  | "classic"
+  | "jade"
+  | "dark"
+  | "parchment"
+  | "walnut"
+  | "porcelain"
+  | "slate"
+  | "crystal";
+export type PieceStyle =
+  | "classic"
+  | "seal"
+  | "plain"
+  | "paper"
+  | "jade"
+  | "flat"
+  | "porcelain"
+  | "lacquer"
+  | "stone"
+  | "bamboo"
+  | "crystal";
 export type CoordinateMode = "no" | "edge" | "all";
 export type MoveMethod = "drag" | "select" | "both";
 
@@ -118,6 +149,9 @@ export function XiangqiBoard({
   orientation,
   boardTheme = "classic",
   pieceStyle = "classic",
+  pieceTextScale = 100,
+  pieceInnerScale = 80,
+  pieceInnerRingVisible = true,
   shapes = [],
   autoShapes = [],
   showDests = true,
@@ -138,6 +172,9 @@ export function XiangqiBoard({
   orientation: Orientation;
   boardTheme?: BoardTheme;
   pieceStyle?: PieceStyle;
+  pieceTextScale?: number;
+  pieceInnerScale?: number;
+  pieceInnerRingVisible?: boolean;
   shapes?: XiangqiDrawShape[];
   autoShapes?: XiangqiDrawShape[];
   showDests?: boolean;
@@ -168,7 +205,12 @@ export function XiangqiBoard({
         },
       ]
     : [...autoShapes, ...shapes];
-
+  const clampedPieceInnerScale = clamp(
+    pieceInnerScale,
+    XIANGQI_PIECE_INNER_SCALE_MIN,
+    XIANGQI_PIECE_INNER_SCALE_MAX,
+  );
+  const showPieceInnerRing = pieceInnerRingVisible && xiangqiPieceStyleHasInnerRing(pieceStyle);
   const handlePoint = (target: Square) => {
     if (onPutPiece && editingPiece !== undefined) {
       onPutPiece(target, editingPiece);
@@ -277,6 +319,17 @@ export function XiangqiBoard({
         className={classes.board}
         data-theme={boardTheme}
         data-piece-style={pieceStyle}
+        data-piece-inner-ring={showPieceInnerRing ? "show" : "hide"}
+        style={
+          {
+            "--piece-text-scale": `${
+              clamp(pieceTextScale, XIANGQI_PIECE_TEXT_SCALE_MIN, XIANGQI_PIECE_TEXT_SCALE_MAX) /
+              100
+            }`,
+            "--piece-inner-size": `${clampedPieceInnerScale}%`,
+            "--piece-inner-inset": `${(100 - clampedPieceInnerScale) / 2}%`,
+          } as CSSProperties
+        }
         onMouseDown={(event) => event.preventDefault()}
         onPointerDownCapture={startDrawing}
         onPointerMoveCapture={updateDrawing}

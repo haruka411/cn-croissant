@@ -49,7 +49,13 @@ function getBoardCoordinateColors(boardImage: string): {
 }
 
 function getChessgroundBoardImage(boardImage: string): string {
-  if (["classic", "jade", "dark"].includes(boardImage)) return "gray.svg";
+  if (
+    ["classic", "jade", "dark", "parchment", "walnut", "porcelain", "slate", "crystal"].includes(
+      boardImage,
+    )
+  ) {
+    return "gray.svg";
+  }
   return boardImage;
 }
 

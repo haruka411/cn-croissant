@@ -21,6 +21,8 @@ import { HTML5Backend } from "react-dnd-html5-backend";
 import {
   databaseConversionStateAtom,
   enginesAtom,
+  appFontFamilyAtom,
+  type AppFontFamily,
   fontSizeAtom,
   primaryColorAtom,
   referenceDbAtom,
@@ -161,6 +163,7 @@ function useAppStartup() {
 
 export default function App() {
   const primaryColor = useAtomValue(primaryColorAtom);
+  const appFontFamily = useAtomValue(appFontFamilyAtom);
   const fontSize = useAtomValue(fontSizeAtom);
   const spellCheck = useAtomValue(spellCheckAtom);
   const setDatabaseConversionState = useSetAtom(databaseConversionStateAtom);
@@ -193,6 +196,7 @@ export default function App() {
   }, [setDatabaseConversionState]);
 
   const theme = createTheme({
+    fontFamily: appFontFamilyToCss(appFontFamily),
     primaryColor,
     colors: {
       dark: [
@@ -245,4 +249,21 @@ export default function App() {
       </MantineProvider>
     </DndProvider>
   );
+}
+
+function appFontFamilyToCss(fontFamily: AppFontFamily): string {
+  switch (fontFamily) {
+    case "microsoft-yahei":
+      return '"Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif';
+    case "simhei":
+      return '"SimHei", "Microsoft YaHei", sans-serif';
+    case "simsun":
+      return '"SimSun", "Songti SC", serif';
+    case "kaiti":
+      return '"KaiTi", "STKaiti", "Kaiti SC", serif';
+    case "serif":
+      return "serif";
+    default:
+      return '"Inter", "Segoe UI", "Microsoft YaHei", sans-serif';
+  }
 }
