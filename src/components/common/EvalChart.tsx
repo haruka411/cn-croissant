@@ -16,7 +16,6 @@ import { useTranslation } from "react-i18next";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
 import { useStore } from "zustand";
 import { reportTypeAtom } from "@/state/atoms";
-import { ANNOTATION_INFO, isBasicAnnotation } from "@/utils/annotation";
 import { positionFromFen } from "@/utils/chessops";
 import { skipWhile, takeWhile } from "@/utils/misc";
 import { getGamePhases } from "@/utils/phase";
@@ -36,8 +35,6 @@ type DataPoint = {
   wdlText: string;
   yValue: number | "none";
   movePath: number[];
-  color: string;
-  annotation?: string;
   White: number;
   Draw: number;
   Black: number;
@@ -61,7 +58,7 @@ function EvalChart(props: EvalChartProps) {
       return 2 / (1 + Math.exp(-0.004 * cp)) - 1;
     }
     if (node.children.length === 0) {
-      const [pos, error] = positionFromFen(node.fen);
+      const [pos] = positionFromFen(node.fen);
       if (pos) {
         if (pos.isCheckmate()) {
           return pos?.turn === "white" ? -1 : 1;
@@ -86,7 +83,7 @@ function EvalChart(props: EvalChartProps) {
       }
     }
     if (node.children.length === 0) {
-      const [pos, error] = positionFromFen(node.fen);
+      const [pos] = positionFromFen(node.fen);
       if (pos) {
         if (pos.isCheckmate()) return t("Common.Checkmate");
         if (pos.isStalemate()) return t("Common.Stalemate");
@@ -113,13 +110,11 @@ function EvalChart(props: EvalChartProps) {
       yield {
         name: `${Math.ceil(currentNode.node.halfMoves / 2)}.${
           pos?.turn === "black" ? "" : ".."
-        } ${currentNode.node.san}${currentNode.node.annotations}`,
+        } ${currentNode.node.san}`,
         cpText: getEvalText(currentNode.node, "cp"),
         wdlText: getEvalText(currentNode.node, "wdl"),
         yValue: yValue ?? "none",
         movePath: currentNode.position,
-        color: ANNOTATION_INFO[currentNode.node.annotations[0]]?.color || "gray",
-        annotation: currentNode.node.annotations[0],
         White: wdl ? wdl[0] : 0,
         Draw: wdl ? wdl[1] : 0,
         Black: wdl ? wdl[2] : 0,
@@ -227,7 +222,6 @@ function EvalChart(props: EvalChartProps) {
             }}
             areaProps={{
               isAnimationActive: false,
-              dot: <CustomDot />,
             }}
             gridAxis="none"
             tooltipProps={{
@@ -308,33 +302,12 @@ function CustomTooltip({
     const dataPoint = payload[0].payload;
     return (
       <Paper px="md" py="sm" withBorder shadow="md" radius="md">
-        <Text
-          className={classes.tooltipTitle}
-          c={dataPoint.color === "gray" ? undefined : dataPoint.color}
-        >
-          {dataPoint.name}
-        </Text>
+        <Text className={classes.tooltipTitle}>{dataPoint.name}</Text>
         <Text>{type === "cp" ? dataPoint.cpText : dataPoint.wdlText}</Text>
       </Paper>
     );
   }
   return null;
-}
-
-function CustomDot(props: { cx?: number; cy?: number; payload?: any }) {
-  const { cx, cy, payload } = props;
-  if (!payload || !payload.annotation || !isBasicAnnotation(payload.annotation)) return null;
-  return (
-    <circle
-      cx={cx}
-      cy={cy}
-      r={4}
-      fill={`var(--mantine-color-${payload.color}-7)`}
-      stroke="var(--mantine-color-body)"
-      strokeWidth={1}
-      style={{ pointerEvents: "none" }}
-    />
-  );
 }
 
 export default EvalChart;

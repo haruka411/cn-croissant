@@ -7,13 +7,11 @@ import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
 import { commands, type GoMode } from "@/bindings";
 import { TreeStateContext } from "@/components/common/TreeStateContext";
-import { enginesAtom, referenceDbAtom } from "@/state/atoms";
+import { enginesAtom } from "@/state/atoms";
 import type { LocalEngine } from "@/utils/engines";
 
 const reportSettingsAtom = atomWithStorage("report-settings", {
-  novelty: true,
   reversed: true,
-  variations: true,
   goMode: { t: "Time", c: 500 } as Exclude<GoMode, { t: "Infinite" }>,
   engine: "",
 });
@@ -35,7 +33,6 @@ function ReportModal({
 }) {
   const { t } = useTranslation();
 
-  const referenceDb = useAtomValue(referenceDbAtom);
   const engines = useAtomValue(enginesAtom);
   const localEngines = useMemo(
     () => (engines ?? []).filter((e): e is LocalEngine => e.type === "local"),
@@ -51,9 +48,6 @@ function ReportModal({
     validate: {
       engine: (value) => {
         if (!value) return t("Board.Analysis.EngineRequired");
-      },
-      novelty: (value) => {
-        if (value && !referenceDb) return t("Board.Analysis.RefDBRequired");
       },
     },
   });
@@ -85,9 +79,9 @@ function ReportModal({
         engine?.path ?? "",
         form.values.goMode,
         {
-          annotateNovelties: form.values.novelty,
+          annotateNovelties: false,
           fen: initialFen,
-          referenceDb,
+          referenceDb: null,
           reversed: form.values.reversed,
           moves,
         },
@@ -95,9 +89,7 @@ function ReportModal({
       )
       .then((analysis) => {
         if (analysis.status === "ok") {
-          addAnalysis(analysis.data, {
-            showVariations: form.values.variations,
-          });
+          addAnalysis(analysis.data);
         }
       })
       .finally(() => setInProgress(false));
@@ -161,18 +153,6 @@ function ReportModal({
             label={t("Board.Analysis.Reversed")}
             description={t("Board.Analysis.Reversed.Desc")}
             {...form.getInputProps("reversed", { type: "checkbox" })}
-          />
-
-          <Checkbox
-            label={t("Board.Analysis.AnnotateNovelties")}
-            description={t("Board.Analysis.AnnotateNovelties.Desc")}
-            {...form.getInputProps("novelty", { type: "checkbox" })}
-          />
-
-          <Checkbox
-            label={t("Board.Analysis.ShowVariations")}
-            description={t("Board.Analysis.ShowVariations.Desc")}
-            {...form.getInputProps("variations", { type: "checkbox" })}
           />
 
           <Group justify="right">

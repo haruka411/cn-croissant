@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import { match } from "ts-pattern";
 import {
   currentGameStateAtom,
+  currentGameStartFromCurrentAtom,
   currentPlayersAtom,
   currentTabAtom,
   gameInputColorAtom,
@@ -49,6 +50,7 @@ function BoardGame() {
   const [player2Settings, setPlayer2Settings] = useAtom(gamePlayer2SettingsAtom);
   const [sameTimeControl, setSameTimeControl] = useAtom(gameSameTimeControlAtom);
   const [gameState, setGameState] = useAtom(currentGameStateAtom);
+  const [gameStartFromCurrent, setGameStartFromCurrent] = useAtom(currentGameStartFromCurrentAtom);
   const [players, setPlayers] = useAtom(currentPlayersAtom);
   const [, setCurrentTab] = useAtom(currentTabAtom);
   const boardRef = useRef(null);
@@ -58,6 +60,7 @@ function BoardGame() {
   const currentNode = useXiangqiStore((s) => s.currentNode());
   const currentPath = useXiangqiStore((s) => s.path);
   const deleteMove = useXiangqiStore((s) => s.deleteMove);
+  const deleteMovesFrom = useXiangqiStore((s) => s.deleteMovesFrom);
   const dirty = useXiangqiStore((s) => s.dirty);
   const [error, setError] = useState<string | null>(null);
   const [clocks, setClocks] = useState<{ red: number | null; black: number | null }>({
@@ -185,7 +188,9 @@ function BoardGame() {
       return;
     }
 
-    resetGame();
+    if (!gameStartFromCurrent) {
+      resetGame();
+    }
     setPlayers({
       white: nextPlayers.white,
       black: nextPlayers.black,
@@ -205,12 +210,14 @@ function BoardGame() {
       orientation: nextPlayers.orientation,
     });
     setGameState("playing");
+    setGameStartFromCurrent(false);
     setError(null);
   }
 
   function newGame() {
     resetGame();
     setGameState("settingUp");
+    setGameStartFromCurrent(false);
     setClocks({ red: null, black: null });
     timeoutHandled.current = false;
     lastClockTick.current = null;
@@ -222,8 +229,13 @@ function BoardGame() {
   }
 
   function undoMove() {
-    if (currentPath.length === 0) return;
-    deleteMove(currentPath);
+    const undoPath = findUndoPath(currentPath, players);
+    if (undoPath.length === 0) return;
+    if (hasEngine) {
+      deleteMovesFrom(undoPath);
+    } else {
+      deleteMove(undoPath);
+    }
     setHeaders({
       ...headers,
       result: "*",
@@ -240,6 +252,7 @@ function BoardGame() {
   }
 
   const hasEngine = players.white?.type === "engine" || players.black?.type === "engine";
+  const canUndo = findUndoPath(currentPath, players).length > 0;
 
   return (
     <>
@@ -377,7 +390,7 @@ function BoardGame() {
                   <Button
                     variant="default"
                     onClick={undoMove}
-                    disabled={currentPath.length === 0}
+                    disabled={!canUndo}
                     leftSection={<IconArrowBackUp />}
                   >
                     {t("Board.Game.Undo")}
@@ -434,6 +447,23 @@ function displayName(player: OpponentSettings, fallback: string) {
     return player.engine?.name || fallback;
   }
   return player.name || fallback;
+}
+
+function findUndoPath(
+  currentPath: number[],
+  players: { white?: OpponentSettings; black?: OpponentSettings },
+) {
+  const hasEngine = players.white?.type === "engine" || players.black?.type === "engine";
+  if (!hasEngine) return currentPath;
+
+  for (let length = currentPath.length; length > 0; length -= 1) {
+    const sideThatMoved = length % 2 === 1 ? "white" : "black";
+    const player = sideThatMoved === "white" ? players.white : players.black;
+    if (player?.type === "human") {
+      return currentPath.slice(0, length);
+    }
+  }
+  return [];
 }
 
 function formatClock(milliseconds: number | null): string {

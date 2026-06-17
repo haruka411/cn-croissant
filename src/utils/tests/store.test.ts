@@ -294,26 +294,6 @@ test("should handle deleteMove", () => {
     expect(getNewState()).toStrictEqual({ ...defaultTree(), dirty: true });
 });
 
-test("should handle setAnnotation", () => {
-    store.setState({ ...treeE4D5(), position: [0] });
-    store.getState().setAnnotation("!");
-
-    expect(getNewState()).toStrictEqual({
-        ...treeE4D5(),
-        dirty: true,
-        position: [0],
-        root: {
-            ...treeE4D5().root,
-            children: [
-                {
-                    ...treeE4D5().root.children[0],
-                    annotations: ["!"],
-                },
-            ],
-        },
-    });
-});
-
 test("should handle setComment", () => {
     store.setState({ ...treeE4D5(), position: [0] });
     store.getState().setComment("test");

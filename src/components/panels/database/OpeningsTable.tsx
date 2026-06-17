@@ -5,7 +5,7 @@ import { memo, useContext } from "react";
 import { useStore } from "zustand";
 import { TreeStateContext } from "@/components/common/TreeStateContext";
 import { moveNotationTypeAtom } from "@/state/atoms";
-import { addPieceSymbol } from "@/utils/annotation";
+import { addPieceSymbol } from "@/utils/moveNotation";
 import type { Opening } from "@/utils/db";
 import { formatNumber } from "@/utils/format";
 import classes from "./OpeningsTable.module.css";

@@ -1,3 +1,4 @@
+import { AreaChart } from "@mantine/charts";
 import {
   ActionIcon,
   Alert,
@@ -6,6 +7,7 @@ import {
   Button,
   Checkbox,
   Collapse,
+  CopyButton,
   Divider,
   Group,
   HoverCard,
@@ -16,12 +18,19 @@ import {
   Progress,
   ScrollArea,
   Select,
+  Skeleton,
   Stack,
+  Tabs,
+  Table,
   Text,
   Tooltip,
+  useMantineTheme,
 } from "@mantine/core";
 import {
+  IconCheck,
+  IconChevronDown,
   IconChevronsRight,
+  IconCopy,
   IconInfoCircle,
   IconPinned,
   IconPinnedOff,
@@ -35,12 +44,21 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useNavigate } from "@tanstack/react-router";
-import { useAtom, useSetAtom } from "jotai";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { GoMode } from "@/bindings";
+import type { CategoricalChartFunc } from "recharts/types/chart/types";
+import type { EngineLog, GoMode } from "@/bindings";
+import EngineLogsView from "@/components/common/EngineLogsView";
 import TimeInput from "@/components/common/TimeInput";
-import { enginesAtom, xiangqiEngineArrowsAtom, xiangqiEvaluationAtom } from "@/state/atoms";
+import {
+  currentAnalysisTabAtom,
+  enginesAtom,
+  showArrowsAtom,
+  showConsecutiveArrowsAtom,
+  xiangqiEngineArrowsAtom,
+  xiangqiEvaluationAtom,
+} from "@/state/atoms";
 import type { EngineSettings, LocalEngine } from "@/utils/engines";
 import EngineSelection from "../panels/analysis/EngineSelection";
 import CoresSlider from "../panels/analysis/CoresSlider";
@@ -48,11 +66,21 @@ import HashSlider from "../panels/analysis/HashSlider";
 import LinesSlider from "../panels/analysis/LinesSlider";
 import { formatXiangqiMove } from "@/xiangqi/notation";
 import {
+  formatXiangqiScore,
+  isPositiveXiangqiScore,
+  parseXiangqiEvaluation,
+  scoreToXiangqiWinChance,
+} from "@/xiangqi/evaluation";
+import {
   applyMove,
   makeFen,
   opposite,
   parseFen,
   parseUciMove,
+  traverseMainline,
+  type GameNode,
+  type Square,
+  type XiangqiDrawShape,
   type XiangqiMove,
   type XiangqiPosition,
 } from "@/xiangqi/xiangqi";
@@ -62,6 +90,7 @@ import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
 type EngineLine = {
   multipv: number;
   depth: number;
+  nodes?: number;
   score: string;
   pv: string[];
 };
@@ -91,15 +120,39 @@ type XiangqiAnalysisUpdate = {
   analysis: EngineAnalysis;
 };
 
-function XiangqiAnalysisPanel() {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
+type XiangqiAnalysisTab = "engines" | "report" | "logs";
+
+type XiangqiAnalysisContextValue = {
+  loadedEngines: LocalEngine[];
+  effectiveLoadedEngines: LocalEngine[];
+  orderedEngines: LocalEngine[];
+  activeResults: Record<string, EngineResult>;
+  analysisFen: string;
+  reportScores: Record<string, string>;
+  threatMode: boolean;
+  setThreatMode: React.Dispatch<React.SetStateAction<boolean>>;
+  pinnedEngineIds: string[];
+  playMove: (move: XiangqiMove) => void;
+  getSettings: (engine: LocalEngine) => XiangqiEngineSettings;
+  updateSettings: (
+    engineId: string,
+    updater: (previous: XiangqiEngineSettings) => XiangqiEngineSettings,
+  ) => void;
+  togglePinned: (engineId: string) => void;
+};
+
+const XiangqiAnalysisContext = createContext<XiangqiAnalysisContextValue | null>(null);
+
+export function XiangqiAnalysisProvider({ children }: { children: React.ReactNode }) {
   const [engines, setEngines] = useAtom(enginesAtom);
+  const showArrows = useAtomValue(showArrowsAtom);
+  const showConsecutiveArrows = useAtomValue(showConsecutiveArrowsAtom);
   const setEngineArrows = useSetAtom(xiangqiEngineArrowsAtom);
   const setEvaluation = useSetAtom(xiangqiEvaluationAtom);
   const fen = useXiangqiStore((s) => s.currentNode().fen);
   const playMove = useXiangqiStore((s) => s.makeMove);
   const [results, setResults] = useState<Record<string, EngineResult>>({});
+  const [reportScores, setReportScores] = useState<Record<string, string>>({});
   const [engineSettingsOverrides, setEngineSettingsOverrides] = useState<
     Record<string, XiangqiEngineSettings>
   >({});
@@ -210,6 +263,7 @@ function XiangqiAnalysisPanel() {
             requestId: requestIds[engine.id],
             loading: true,
             progress: 0,
+            analysis: previous[engine.id]?.analysis,
           };
         }
         return next;
@@ -242,22 +296,40 @@ function XiangqiAnalysisPanel() {
   }, [activeEngines, analysisFen]);
 
   useEffect(() => {
-    const arrows = activeEngines
-      .map((engine, index) => {
-        const firstMove = results[engine.id]?.analysis?.lines[0]?.pv[0];
-        const parsed = firstMove ? parseUciMove(firstMove) : null;
-        if (!parsed) return null;
-        return {
-          orig: parsed.from,
-          dest: parsed.to,
-          brush: ENGINE_ARROW_BRUSHES[index % ENGINE_ARROW_BRUSHES.length],
-          modifiers: { lineWidth: 9 },
-        };
-      })
-      .filter((shape): shape is NonNullable<typeof shape> => shape !== null);
+    if (threatMode) return;
+    const score = activeEngines
+      .map((engine) => results[engine.id])
+      .find((result) => result?.fen === analysisFen && result.analysis?.lines[0]?.score)?.analysis
+      ?.lines[0]?.score;
+    if (!score) return;
+
+    setReportScores((previous) =>
+      previous[analysisFen] === score ? previous : { ...previous, [analysisFen]: score },
+    );
+  }, [activeEngines, analysisFen, results, threatMode]);
+
+  useEffect(() => {
+    if (!showArrows) {
+      setEngineArrows([]);
+      return;
+    }
+
+    const arrows: XiangqiDrawShape[] = [];
+    for (const [index, engine] of activeEngines.entries()) {
+      const engineArrows = buildXiangqiEngineArrows(
+        results[engine.id]?.analysis?.lines ?? [],
+        ENGINE_ARROW_BRUSHES[index % ENGINE_ARROW_BRUSHES.length],
+        showConsecutiveArrows,
+      );
+
+      for (const arrow of engineArrows) {
+        if (!hasSameXiangqiArrow(arrows, arrow)) arrows.push(arrow);
+      }
+    }
+
     setEngineArrows(arrows);
     return () => setEngineArrows([]);
-  }, [activeEngines, results, setEngineArrows]);
+  }, [activeEngines, results, setEngineArrows, showArrows, showConsecutiveArrows]);
 
   useEffect(() => {
     if (activeEngines.length === 0) {
@@ -282,105 +354,348 @@ function XiangqiAnalysisPanel() {
 
     return () => setEvaluation(null);
   }, [activeEngines, analysisFen, results, setEvaluation]);
+
+  const context = useMemo<XiangqiAnalysisContextValue>(
+    () => ({
+      loadedEngines,
+      effectiveLoadedEngines,
+      orderedEngines,
+      activeResults: results,
+      analysisFen,
+      reportScores,
+      threatMode,
+      setThreatMode,
+      pinnedEngineIds,
+      playMove,
+      getSettings: (engine) => getXiangqiSettings(engine, engineSettingsOverrides[engine.id]),
+      updateSettings: updateEngineSettings,
+      togglePinned: (engineId) =>
+        setPinnedEngineIds((previous) =>
+          previous.includes(engineId)
+            ? previous.filter((id) => id !== engineId)
+            : [...previous, engineId],
+        ),
+    }),
+    [
+      analysisFen,
+      effectiveLoadedEngines,
+      engineSettingsOverrides,
+      loadedEngines,
+      orderedEngines,
+      pinnedEngineIds,
+      playMove,
+      reportScores,
+      results,
+      threatMode,
+      updateEngineSettings,
+    ],
+  );
+
+  return (
+    <XiangqiAnalysisContext.Provider value={context}>{children}</XiangqiAnalysisContext.Provider>
+  );
+}
+
+function useXiangqiAnalysisContext() {
+  const context = useContext(XiangqiAnalysisContext);
+  if (!context) {
+    throw new Error("XiangqiAnalysisPanel must be used inside XiangqiAnalysisProvider");
+  }
+  return context;
+}
+
+function XiangqiAnalysisPanel() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [tab, setTab] = useAtom(currentAnalysisTabAtom);
+  const {
+    loadedEngines,
+    effectiveLoadedEngines,
+    orderedEngines,
+    activeResults,
+    analysisFen,
+    threatMode,
+    setThreatMode,
+    pinnedEngineIds,
+    playMove,
+    getSettings,
+    updateSettings,
+    togglePinned,
+  } = useXiangqiAnalysisContext();
+
+  const analysisTab: XiangqiAnalysisTab =
+    tab === "report" || tab === "logs" || tab === "engines" ? tab : "engines";
+
   return (
     <Stack h="100%" pl="sm">
-      <ScrollArea offsetScrollbars>
-        <Stack gap="sm" py="sm">
-          {loadedEngines.length === 0 && (
-            <Alert icon={<IconInfoCircle size="1rem" />} color="yellow">
-              <Stack gap="xs">
-                <Text size="sm">{t("Board.Analysis.NoLocalXiangqiEngine")}</Text>
-                <EngineSelection />
-              </Stack>
-            </Alert>
-          )}
+      <Tabs
+        h="100%"
+        orientation="vertical"
+        placement="right"
+        value={analysisTab}
+        onChange={(value) => setTab((value as XiangqiAnalysisTab | null) ?? "engines")}
+        keepMounted={false}
+        style={{ display: "flex" }}
+      >
+        <Tabs.List>
+          <Tabs.Tab value="engines">{t("Board.Analysis.Engines")}</Tabs.Tab>
+          <Tabs.Tab value="report">{t("Board.Analysis.Report")}</Tabs.Tab>
+          <Tabs.Tab value="logs" disabled={loadedEngines.length === 0}>
+            {t("Board.Analysis.Logs")}
+          </Tabs.Tab>
+        </Tabs.List>
 
-          {loadedEngines.length > 0 && (
-            <Paper withBorder p="xs">
-              <Group gap="xs">
-                <ActionIcon size="lg" variant="default">
-                  <IconChevronsRight size="1.25rem" />
-                </ActionIcon>
-                <Text size="sm" fw={600} flex={1}>
-                  {loadedEngines.length === 1
-                    ? loadedEngines[0].name
-                    : t("Board.Analysis.EngineCount", { count: loadedEngines.length })}
-                </Text>
-                <Tooltip label={t("Board.Analysis.Threat", "Threat analysis")}>
-                  <ActionIcon
-                    variant={threatMode ? "filled" : "default"}
-                    color={threatMode ? "red" : undefined}
-                    size="lg"
-                    onClick={() => setThreatMode((enabled) => !enabled)}
-                  >
-                    <IconTargetArrow size="1rem" />
-                  </ActionIcon>
-                </Tooltip>
-                <Popover width={250} position="bottom-end" shadow="md">
-                  <Popover.Target>
-                    <ActionIcon variant="default" size="lg">
-                      <IconSelector />
-                    </ActionIcon>
-                  </Popover.Target>
-                  <Popover.Dropdown>
-                    <EngineSelection />
-                  </Popover.Dropdown>
-                </Popover>
-                <Button
-                  variant="default"
-                  leftSection={<IconSettings size="0.875rem" />}
-                  onClick={() => navigate({ to: "/engines" })}
-                >
-                  {t("Board.Analysis.ManageEngines")}
-                </Button>
-              </Group>
-            </Paper>
-          )}
+        <Tabs.Panel
+          value="engines"
+          pt="sm"
+          style={{
+            overflow: "hidden",
+            display: analysisTab === "engines" ? "flex" : "none",
+            flexDirection: "column",
+          }}
+        >
+          <XiangqiEnginesPanel
+            loadedEngines={loadedEngines}
+            effectiveLoadedEngines={effectiveLoadedEngines}
+            orderedEngines={orderedEngines}
+            activeResults={activeResults}
+            analysisFen={analysisFen}
+            threatMode={threatMode}
+            pinnedEngineIds={pinnedEngineIds}
+            setThreatMode={setThreatMode}
+            playMove={playMove}
+            onManage={() => navigate({ to: "/engines" })}
+            getSettings={getSettings}
+            updateSettings={updateSettings}
+            togglePinned={togglePinned}
+          />
+        </Tabs.Panel>
 
-          <Stack gap="sm">
-            {orderedEngines.map((engine, index) => {
-              const effectiveEngine =
-                effectiveLoadedEngines.find((candidate) => candidate.id === engine.id) ?? engine;
-              const result = results[engine.id];
-              return (
-                <EngineAnalysisCard
-                  key={engine.id}
-                  engine={effectiveEngine}
-                  result={result}
-                  fen={analysisFen}
-                  realFen={fen}
-                  threatMode={threatMode}
-                  pinned={pinnedEngineIds.includes(engine.id)}
-                  color={ENGINE_ARROW_COLORS[index % ENGINE_ARROW_COLORS.length]}
-                  onPlay={playMove}
-                  onManage={() => navigate({ to: "/engines" })}
-                  settings={getXiangqiSettings(engine, engineSettingsOverrides[engine.id])}
-                  setSettings={(updater) => updateEngineSettings(engine.id, updater)}
-                  onTogglePinned={() =>
-                    setPinnedEngineIds((previous) =>
-                      previous.includes(engine.id)
-                        ? previous.filter((id) => id !== engine.id)
-                        : [...previous, engine.id],
-                    )
-                  }
-                />
-              );
-            })}
-          </Stack>
-        </Stack>
-      </ScrollArea>
+        <Tabs.Panel
+          value="report"
+          pt="sm"
+          style={{
+            overflow: "hidden",
+            display: analysisTab === "report" ? "flex" : "none",
+            flexDirection: "column",
+          }}
+        >
+          <XiangqiReportPanel />
+        </Tabs.Panel>
+
+        <Tabs.Panel
+          value="logs"
+          pt="sm"
+          style={{
+            overflow: "hidden",
+            display: analysisTab === "logs" ? "flex" : "none",
+            flexDirection: "column",
+          }}
+        >
+          <XiangqiLogsPanel engines={loadedEngines} results={activeResults} />
+        </Tabs.Panel>
+      </Tabs>
     </Stack>
   );
 }
 
-const ENGINE_ARROW_BRUSHES = ["green", "blue", "red", "yellow"] as const;
+function XiangqiEnginesPanel({
+  loadedEngines,
+  effectiveLoadedEngines,
+  orderedEngines,
+  activeResults,
+  analysisFen,
+  threatMode,
+  pinnedEngineIds,
+  setThreatMode,
+  playMove,
+  onManage,
+  getSettings,
+  updateSettings,
+  togglePinned,
+}: {
+  loadedEngines: LocalEngine[];
+  effectiveLoadedEngines: LocalEngine[];
+  orderedEngines: LocalEngine[];
+  activeResults: Record<string, EngineResult>;
+  analysisFen: string;
+  threatMode: boolean;
+  pinnedEngineIds: string[];
+  setThreatMode: React.Dispatch<React.SetStateAction<boolean>>;
+  playMove: (move: XiangqiMove) => void;
+  onManage: () => void;
+  getSettings: (engine: LocalEngine) => XiangqiEngineSettings;
+  updateSettings: (
+    engineId: string,
+    updater: (previous: XiangqiEngineSettings) => XiangqiEngineSettings,
+  ) => void;
+  togglePinned: (engineId: string) => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <ScrollArea offsetScrollbars flex={1}>
+      <Stack gap="sm" py="sm">
+        {loadedEngines.length === 0 && (
+          <Alert icon={<IconInfoCircle size="1rem" />} color="yellow">
+            <Stack gap="xs">
+              <Text size="sm">{t("Board.Analysis.NoLocalXiangqiEngine")}</Text>
+              <EngineSelection />
+            </Stack>
+          </Alert>
+        )}
+
+        {loadedEngines.length > 0 && (
+          <Paper withBorder p="xs">
+            <Group gap="xs">
+              <ActionIcon size="lg" variant="default">
+                <IconChevronsRight size="1.25rem" />
+              </ActionIcon>
+              <Text size="sm" fw={600} flex={1}>
+                {loadedEngines.length === 1
+                  ? loadedEngines[0].name
+                  : t("Board.Analysis.EngineCount", { count: loadedEngines.length })}
+              </Text>
+              <Tooltip label={t("Board.Analysis.Threat", "Threat analysis")}>
+                <ActionIcon
+                  variant={threatMode ? "filled" : "default"}
+                  color={threatMode ? "red" : undefined}
+                  size="lg"
+                  onClick={() => setThreatMode((enabled) => !enabled)}
+                >
+                  <IconTargetArrow size="1rem" />
+                </ActionIcon>
+              </Tooltip>
+              <Popover width={250} position="bottom-end" shadow="md">
+                <Popover.Target>
+                  <ActionIcon variant="default" size="lg">
+                    <IconSelector />
+                  </ActionIcon>
+                </Popover.Target>
+                <Popover.Dropdown>
+                  <EngineSelection />
+                </Popover.Dropdown>
+              </Popover>
+              <Button
+                variant="default"
+                leftSection={<IconSettings size="0.875rem" />}
+                onClick={onManage}
+              >
+                {t("Board.Analysis.ManageEngines")}
+              </Button>
+            </Group>
+          </Paper>
+        )}
+
+        <Stack gap="sm">
+          {orderedEngines.map((engine, index) => {
+            const effectiveEngine =
+              effectiveLoadedEngines.find((candidate) => candidate.id === engine.id) ?? engine;
+            const result = activeResults[engine.id];
+            return (
+              <EngineAnalysisCard
+                key={engine.id}
+                engine={effectiveEngine}
+                result={result}
+                fen={analysisFen}
+                threatMode={threatMode}
+                pinned={pinnedEngineIds.includes(engine.id)}
+                color={ENGINE_ARROW_COLORS[index % ENGINE_ARROW_COLORS.length]}
+                onPlay={playMove}
+                onManage={onManage}
+                settings={getSettings(engine)}
+                setSettings={(updater) => updateSettings(engine.id, updater)}
+                onTogglePinned={() => togglePinned(engine.id)}
+              />
+            );
+          })}
+        </Stack>
+      </Stack>
+    </ScrollArea>
+  );
+}
+
+const ENGINE_ARROW_BRUSHES = [
+  { strong: "green", pale: "paleGreen" },
+  { strong: "blue", pale: "paleBlue" },
+  { strong: "red", pale: "paleRed" },
+  { strong: "yellow", pale: "yellow" },
+] as const satisfies readonly EngineArrowBrush[];
 const ENGINE_ARROW_COLORS = ["green", "blue", "red", "yellow"] as const;
+const LARGE_ARROW = 11;
+const MEDIUM_ARROW = 7.5;
+const SMALL_ARROW = 4;
+const MAX_CONSECUTIVE_ARROW_PLY = 5;
+const WIN_CHANCE_ARROW_THRESHOLD = 10;
+type EngineArrowBrush = {
+  strong: NonNullable<XiangqiDrawShape["brush"]>;
+  pale: NonNullable<XiangqiDrawShape["brush"]>;
+};
+
+function buildXiangqiEngineArrows(
+  lines: EngineLine[],
+  brushes: EngineArrowBrush,
+  showConsecutiveArrows: boolean,
+): XiangqiDrawShape[] {
+  const candidates = lines.filter((line) => line.pv.length > 0);
+  const bestWinChance = scoreToXiangqiWinChance(candidates[0]?.score);
+  if (bestWinChance === null) return [];
+
+  const shapes: XiangqiDrawShape[] = [];
+  for (const [candidateIndex, line] of candidates.entries()) {
+    const winChance = scoreToXiangqiWinChance(line.score);
+    if (winChance === null || bestWinChance - winChance >= WIN_CHANCE_ARROW_THRESHOLD) continue;
+
+    const lineWidth = arrowWidthForWinChanceDiff(bestWinChance - winChance);
+    let previousSquare: Square | null = null;
+
+    for (const [ply, uci] of line.pv.entries()) {
+      const move = parseUciMove(uci);
+      if (!move) break;
+      if (previousSquare === null) previousSquare = move.from;
+
+      const shouldDraw =
+        ply === 0 || (showConsecutiveArrows && candidateIndex === 0 && ply % 2 === 0);
+      if (!shouldDraw) continue;
+
+      if (
+        ply >= MAX_CONSECUTIVE_ARROW_PLY ||
+        previousSquare !== move.from ||
+        hasSameXiangqiArrow(shapes, { orig: move.from, dest: move.to })
+      ) {
+        break;
+      }
+
+      shapes.push({
+        orig: move.from,
+        dest: move.to,
+        brush: candidateIndex === 0 ? brushes.strong : brushes.pale,
+        modifiers: { lineWidth },
+      });
+      previousSquare = move.to;
+    }
+  }
+
+  return shapes;
+}
+
+function hasSameXiangqiArrow(
+  shapes: XiangqiDrawShape[],
+  shape: Pick<XiangqiDrawShape, "orig" | "dest">,
+): boolean {
+  return shapes.some((candidate) => candidate.orig === shape.orig && candidate.dest === shape.dest);
+}
+
+function arrowWidthForWinChanceDiff(diff: number): number {
+  if (diff < 2.5) return LARGE_ARROW;
+  if (diff < 5) return MEDIUM_ARROW;
+  return SMALL_ARROW;
+}
 
 function EngineAnalysisCard({
   engine,
   result,
   fen,
-  realFen,
   threatMode,
   pinned,
   color,
@@ -393,7 +708,6 @@ function EngineAnalysisCard({
   engine: LocalEngine;
   result: EngineResult | undefined;
   fen: string;
-  realFen: string;
   threatMode: boolean;
   pinned: boolean;
   color: string;
@@ -405,9 +719,9 @@ function EngineAnalysisCard({
 }) {
   const { t } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const bestLine = result?.analysis?.lines[0];
-  const bestMove = result?.analysis?.bestmove;
-  const parsedBest = bestMove ? parseUciMove(bestMove) : null;
+  const lines = result?.analysis?.lines ?? [];
+  const bestLine = lines[0];
+  const expectedLines = Math.max(1, getNumericSetting(settings.settings, "MultiPV", 1));
   const progress = Math.max(0, Math.min(result?.progress ?? 0, 100));
 
   return (
@@ -445,7 +759,7 @@ function EngineAnalysisCard({
           value={
             settings.enabled
               ? bestLine
-                ? formatScore(bestLine.score)
+                ? formatXiangqiScore(bestLine.score)
                 : result?.loading
                   ? "..."
                   : "-"
@@ -501,40 +815,170 @@ function EngineAnalysisCard({
             {result.error}
           </Alert>
         )}
-        {bestLine ? (
-          <Group gap="sm" align="center" wrap="nowrap">
-            <Box
-              px="sm"
-              py={4}
-              style={{
-                borderRadius: 4,
-                background: "var(--mantine-color-default)",
-                color: "var(--mantine-color-text)",
-                fontWeight: 900,
-                minWidth: 64,
-                textAlign: "center",
-              }}
-            >
-              {formatScore(bestLine.score)}
-            </Box>
-            <PvLine fen={fen} pv={bestLine.pv} />
-          </Group>
-        ) : !settings.enabled ? (
-          <Text size="sm" c="dimmed">
-            {t("Board.Analysis.InactiveEngine")}
-          </Text>
-        ) : (
-          <Text size="sm" c="dimmed">
-            {result?.loading ? t("Board.Analysis.Thinking") : t("Board.Analysis.NoAnalysisYet")}
-          </Text>
-        )}
-        {parsedBest && !threatMode && (
-          <Button size="xs" variant="light" w="fit-content" onClick={() => onPlay(parsedBest)}>
-            {t("Board.Analysis.PlayMove", { move: formatMoveFromFen(realFen, parsedBest) })}
-          </Button>
-        )}
+        <Table withRowBorders={false}>
+          <Table.Tbody>
+            {lines.length > 0 &&
+              lines.map((line) => (
+                <XiangqiAnalysisRow
+                  key={`${line.multipv}-${line.pv.join(" ")}`}
+                  engine={engine.name}
+                  line={line}
+                  fen={fen}
+                  threatMode={threatMode}
+                  onPlay={onPlay}
+                />
+              ))}
+            {lines.length === 0 &&
+              settings.enabled &&
+              result?.loading &&
+              Array.from({ length: expectedLines }).map((_, index) => (
+                <Table.Tr key={index}>
+                  <Table.Td colSpan={3}>
+                    <Skeleton height={35} radius="xl" p={5} />
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            {lines.length === 0 && (!settings.enabled || !result?.loading) && (
+              <Table.Tr>
+                <Table.Td colSpan={3}>
+                  <Text ta="center" my="lg" size="sm" c="dimmed">
+                    {!settings.enabled
+                      ? t("Board.Analysis.InactiveEngine")
+                      : t("Board.Analysis.NoAnalysisYet")}
+                  </Text>
+                </Table.Td>
+              </Table.Tr>
+            )}
+          </Table.Tbody>
+        </Table>
       </Stack>
     </Paper>
+  );
+}
+
+function XiangqiAnalysisRow({
+  engine,
+  line,
+  fen,
+  threatMode,
+  onPlay,
+}: {
+  engine: string;
+  line: EngineLine;
+  fen: string;
+  threatMode: boolean;
+  onPlay: (move: XiangqiMove) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const outputMoves = useMemo(
+    () => buildPvTokens(fen, line.pv, null).map((token) => token.text),
+    [fen, line.pv],
+  );
+  const engineOutput = [engine, formatXiangqiScore(line.score), outputMoves.join(" ")]
+    .filter(Boolean)
+    .join(" ");
+  const canExpand = line.pv.length > 12;
+
+  const playPv = useCallback(
+    (ply: number) => {
+      for (const token of line.pv.slice(0, ply)) {
+        const move = parseUciMove(token);
+        if (!move) break;
+        onPlay(move);
+      }
+    },
+    [line.pv, onPlay],
+  );
+
+  return (
+    <Table.Tr style={{ verticalAlign: "top" }}>
+      <Table.Td width={70} py={5}>
+        <XiangqiScoreBubble score={line.score} />
+      </Table.Td>
+      <Table.Td py={5}>
+        <Box
+          style={{
+            minHeight: 35,
+            overflow: open ? "visible" : "hidden",
+            display: "flex",
+            alignItems: "center",
+          }}
+        >
+          <PvLine
+            fen={fen}
+            pv={line.pv}
+            limit={open ? null : 12}
+            onMoveClick={threatMode ? undefined : playPv}
+          />
+        </Box>
+      </Table.Td>
+      <Table.Td width={34} py={5}>
+        <Stack gap={4} align="center">
+          {canExpand && (
+            <ActionIcon
+              variant="subtle"
+              style={{
+                transition: "transform 200ms ease",
+                transform: open ? "rotate(180deg)" : "none",
+              }}
+              onClick={() => setOpen((value) => !value)}
+            >
+              <IconChevronDown size={16} />
+            </ActionIcon>
+          )}
+          {open && (
+            <CopyButton value={engineOutput} timeout={2000}>
+              {({ copied, copy }) => (
+                <Tooltip
+                  label={copied ? t("Common.Copied") : t("Menu.Edit.Copy")}
+                  withArrow
+                  position="right"
+                >
+                  <ActionIcon
+                    color={copied ? "teal" : undefined}
+                    variant="subtle"
+                    onClick={copy}
+                    aria-label={copied ? t("Common.Copied") : t("Menu.Edit.Copy")}
+                  >
+                    {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                  </ActionIcon>
+                </Tooltip>
+              )}
+            </CopyButton>
+          )}
+        </Stack>
+      </Table.Td>
+    </Table.Tr>
+  );
+}
+
+function XiangqiScoreBubble({ score }: { score: string }) {
+  const positive = isPositiveXiangqiScore(score);
+  return (
+    <Box
+      style={(theme) => ({
+        backgroundColor: positive ? theme.colors.gray[0] : theme.colors.dark[9],
+        textAlign: "center",
+        padding: "0.15rem",
+        borderRadius: theme.radius.sm,
+        width: "4rem",
+        height: "1.85rem",
+        boxShadow: theme.shadows.md,
+      })}
+    >
+      <Text
+        fw={700}
+        c={positive ? "black" : "white"}
+        size="sm"
+        ta="center"
+        style={(theme) => ({
+          fontFamily: theme.fontFamilyMonospace,
+        })}
+      >
+        {formatXiangqiScore(score)}
+      </Text>
+    </Box>
   );
 }
 
@@ -653,42 +1097,237 @@ function XiangqiGoModeInput({
 }) {
   const { t } = useTranslation();
   const normalizedGo = normalizeXiangqiGoMode(goMode);
+  const modes = ["Time", "Depth", "Nodes", "Infinite"] as const;
 
   return (
     <Group grow align="flex-end" wrap="nowrap">
       <InputWrapper label={t("Board.Analysis.GoMode", "Go mode")}>
         <Select
           allowDeselect={false}
-          data={[
-            { value: "Time", label: t("GoMode.Time") },
-            { value: "Depth", label: t("GoMode.Depth") },
-          ]}
+          data={modes.map((value) => ({ value, label: t(`GoMode.${value}`) }))}
           value={normalizedGo.t}
-          onChange={(value) => {
-            if (value === "Time") setGoMode({ t: "Time", c: 8000 });
-            else setGoMode({ t: "Depth", c: 10 });
-          }}
+          onChange={(value) => setGoMode(defaultGoMode(value))}
         />
       </InputWrapper>
 
-      <InputWrapper label={normalizedGo.t === "Time" ? t("GoMode.Time") : t("GoMode.Depth")}>
-        {normalizedGo.t === "Time" ? (
-          <TimeInput
-            value={normalizedGo.c}
-            setValue={(value) => setGoMode(normalizeXiangqiGoMode(value))}
+      {normalizedGo.t !== "Infinite" && (
+        <InputWrapper label={t(`GoMode.${normalizedGo.t}`)}>
+          {normalizedGo.t === "Time" ? (
+            <TimeInput
+              value={normalizedGo.c}
+              setValue={(value) => setGoMode(normalizeXiangqiGoMode(value))}
+            />
+          ) : (
+            <NumberInput
+              min={1}
+              max={normalizedGo.t === "Depth" ? 99 : undefined}
+              value={normalizedGo.c}
+              onChange={(value) =>
+                setGoMode(
+                  normalizedGo.t === "Depth"
+                    ? { t: "Depth", c: typeof value === "number" ? value : 1 }
+                    : { t: "Nodes", c: typeof value === "number" ? value : 1 },
+                )
+              }
+            />
+          )}
+        </InputWrapper>
+      )}
+    </Group>
+  );
+}
+
+function XiangqiReportPanel() {
+  const { t } = useTranslation();
+  const theme = useMantineTheme();
+  const { reportScores } = useXiangqiAnalysisContext();
+  const root = useXiangqiStore((s) => s.root);
+  const path = useXiangqiStore((s) => s.path);
+  const goToMove = useXiangqiStore((s) => s.goToMove);
+
+  const data = useMemo(
+    () => buildXiangqiEvalChartData(root, reportScores),
+    [reportScores, root],
+  );
+  const currentPointName = data.find((point) => samePath(point.path, path))?.name;
+  const hasScores = data.some((point) => point.value !== "none");
+
+  const onChartClick: CategoricalChartFunc = (event) => {
+    const point = data.find((candidate) => candidate.name === event.activeLabel);
+    if (point) goToMove(point.path);
+  };
+
+  if (data.length === 0) {
+    return (
+      <Stack h="100%" align="center" justify="center">
+        <Text c="dimmed">{t("Board.Analysis.NoAnalysisYet")}</Text>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack h="100%" p="sm" gap="sm">
+      <Paper withBorder p="sm">
+        <Stack gap="xs">
+          <Group justify="space-between" wrap="nowrap">
+            <Text fw={800}>{t("Board.Analysis.Report")}</Text>
+            <Text size="xs" c="dimmed">
+              {data.filter((point) => point.value !== "none").length}/{data.length}
+            </Text>
+          </Group>
+          <Text size="xs" c="dimmed">
+            当前曲线来自本次会话中已由引擎分析过的主线局面
+          </Text>
+        </Stack>
+      </Paper>
+
+      <Paper withBorder p="sm">
+        {hasScores ? (
+          <AreaChart
+            h={220}
+            data={data}
+            dataKey="name"
+            series={[{ name: "value", color: "red.6" }]}
+            curveType="monotone"
+            connectNulls={false}
+            withXAxis={false}
+            withYAxis
+            yAxisProps={{ domain: [-1, 1], width: 34 }}
+            type="split"
+            fillOpacity={0.7}
+            splitColors={["red.1", "dark.8"]}
+            splitOffset={0.5}
+            activeDotProps={{ r: 3, strokeWidth: 1 }}
+            dotProps={{ r: 0 }}
+            gridAxis="none"
+            referenceLines={
+              currentPointName
+                ? [
+                    {
+                      x: currentPointName,
+                      color: theme.colors[theme.primaryColor][7],
+                    },
+                  ]
+                : []
+            }
+            areaChartProps={{
+              onClick: onChartClick,
+              style: { cursor: "pointer" },
+            }}
+            areaProps={{ isAnimationActive: false }}
+            tooltipProps={{
+              content: ({ payload, active }) => (
+                <XiangqiEvalChartTooltip active={active} payload={payload} />
+              ),
+            }}
           />
         ) : (
-          <NumberInput
-            min={1}
-            max={30}
-            value={normalizedGo.c}
-            onChange={(value) =>
-              setGoMode({ t: "Depth", c: typeof value === "number" ? value : 1 })
-            }
-          />
+          <Stack h={220} align="center" justify="center">
+            <Text c="dimmed" size="sm">
+              打开引擎并浏览主线局面后，这里会显示局势变化
+            </Text>
+          </Stack>
         )}
-      </InputWrapper>
-    </Group>
+      </Paper>
+    </Stack>
+  );
+}
+
+type XiangqiEvalChartPoint = {
+  name: string;
+  move: string;
+  scoreText: string;
+  value: number | "none";
+  path: number[];
+};
+
+function buildXiangqiEvalChartData(
+  root: GameNode,
+  scores: Record<string, string>,
+): XiangqiEvalChartPoint[] {
+  const nodes = traverseMainline(root).slice(1);
+  return nodes.map((node, index) => {
+    const path = Array.from({ length: index + 1 }, () => 0);
+    const turn = parseFen(node.fen).turn;
+    const score = scores[node.fen];
+    const evaluation = score ? parseXiangqiEvaluation(score, turn) : null;
+    const value =
+      evaluation?.redCentipawns !== undefined
+        ? 2 / (1 + Math.exp(-0.004 * evaluation.redCentipawns)) - 1
+        : "none";
+
+    return {
+      name: `${index + 1}. ${node.text}`,
+      move: node.text,
+      scoreText: evaluation?.label ?? "-",
+      value,
+      path,
+    };
+  });
+}
+
+function XiangqiEvalChartTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: readonly { payload: XiangqiEvalChartPoint }[];
+}) {
+  if (!active || !payload?.[0]) return null;
+  const point = payload[0].payload;
+  return (
+    <Paper shadow="md" withBorder p="xs">
+      <Text size="sm" fw={700}>
+        {point.move}
+      </Text>
+      <Text size="xs" c="dimmed">
+        红方视角: {point.scoreText}
+      </Text>
+    </Paper>
+  );
+}
+
+function samePath(left: number[], right: number[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function XiangqiLogsPanel({
+  engines,
+  results,
+}: {
+  engines: LocalEngine[];
+  results: Record<string, EngineResult>;
+}) {
+  const [engineId, setEngineId] = useState("");
+  const selectedEngine = engines.find((engine) => engine.id === engineId) ?? engines[0];
+  const logs = useMemo(
+    () => convertXiangqiLogs(results[selectedEngine?.id ?? ""]?.analysis?.logs ?? []),
+    [results, selectedEngine?.id],
+  );
+
+  useEffect(() => {
+    if (!selectedEngine && engineId) {
+      setEngineId("");
+    } else if (!engineId && selectedEngine) {
+      setEngineId(selectedEngine.id);
+    }
+  }, [engineId, selectedEngine]);
+
+  return (
+    <Stack flex={1} h="100%">
+      <EngineLogsView
+        logs={logs}
+        additionalControls={
+          <Select
+            allowDeselect={false}
+            value={selectedEngine?.id ?? ""}
+            onChange={(id) => setEngineId(id ?? "")}
+            data={engines.map((engine) => ({ value: engine.id, label: engine.name }))}
+            style={{ minWidth: 140 }}
+          />
+        }
+      />
+    </Stack>
   );
 }
 
@@ -705,8 +1344,18 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PvLine({ fen, pv }: { fen: string; pv: string[] }) {
-  const tokens = useMemo(() => buildPvTokens(fen, pv), [fen, pv]);
+function PvLine({
+  fen,
+  pv,
+  limit = 12,
+  onMoveClick,
+}: {
+  fen: string;
+  pv: string[];
+  limit?: number | null;
+  onMoveClick?: (ply: number) => void;
+}) {
+  const tokens = useMemo(() => buildPvTokens(fen, pv, limit), [fen, limit, pv]);
   return (
     <Group gap={6} wrap="wrap" style={{ minWidth: 0 }}>
       {tokens.map((token) => (
@@ -718,9 +1367,10 @@ function PvLine({ fen, pv }: { fen: string; pv: string[] }) {
                 display: "inline-flex",
                 alignItems: "baseline",
                 gap: 3,
-                cursor: "default",
+                cursor: onMoveClick ? "pointer" : "default",
                 whiteSpace: "nowrap",
               }}
+              onClick={() => onMoveClick?.(token.ply)}
             >
               {token.showMoveNumber && (
                 <Text span size="xs" c="dimmed" fw={700}>
@@ -742,7 +1392,11 @@ function PvLine({ fen, pv }: { fen: string; pv: string[] }) {
   );
 }
 
-type XiangqiGoMode = { t: "Depth"; c: number } | { t: "Time"; c: number };
+type XiangqiGoMode =
+  | { t: "Depth"; c: number }
+  | { t: "Time"; c: number }
+  | { t: "Nodes"; c: number }
+  | { t: "Infinite" };
 
 type XiangqiEngineSettings = {
   enabled: boolean;
@@ -781,7 +1435,7 @@ function getXiangqiSettings(
   }
 
   return normalizeXiangqiSettings({
-    enabled: override?.enabled ?? true,
+    enabled: override?.enabled ?? false,
     go: normalizeXiangqiGoMode(engine.go),
     settings: engine.settings ?? [],
     synced: true,
@@ -796,16 +1450,46 @@ function normalizeXiangqiSettings(settings: XiangqiEngineSettings): XiangqiEngin
   };
 }
 
-function normalizeXiangqiGoMode(goMode: GoMode | null | undefined): XiangqiGoMode {
+function normalizeXiangqiGoMode(
+  goMode: GoMode | XiangqiGoMode | null | undefined,
+  fallback: XiangqiGoMode = DEFAULT_XIANGQI_GO,
+): XiangqiGoMode {
   if (goMode?.t === "Time") {
-    return { t: "Time", c: Math.max(50, Math.trunc(goMode.c || 8000)) };
+    return { t: "Time", c: Math.max(50, Math.trunc(goMode.c || fallbackValue(fallback, 8000))) };
   }
 
   if (goMode?.t === "Depth") {
-    return { t: "Depth", c: Math.max(1, Math.min(Math.trunc(goMode.c || 10), 30)) };
+    return { t: "Depth", c: Math.max(1, Math.min(Math.trunc(goMode.c || 10), 99)) };
   }
 
-  return DEFAULT_XIANGQI_GO;
+  if (goMode?.t === "Nodes") {
+    return { t: "Nodes", c: Math.max(1, Math.trunc(goMode.c || 1000000)) };
+  }
+
+  if (goMode?.t === "Infinite") {
+    return { t: "Infinite" };
+  }
+
+  return fallback;
+}
+
+function fallbackValue(goMode: XiangqiGoMode, fallback: number) {
+  return "c" in goMode ? goMode.c : fallback;
+}
+
+function defaultGoMode(value: string | null): XiangqiGoMode {
+  switch (value) {
+    case "Time":
+      return { t: "Time", c: 8000 };
+    case "Depth":
+      return { t: "Depth", c: DEFAULT_XIANGQI_DEPTH };
+    case "Nodes":
+      return { t: "Nodes", c: 1000000 };
+    case "Infinite":
+      return { t: "Infinite" };
+    default:
+      return DEFAULT_XIANGQI_GO;
+  }
 }
 
 function ensureXiangqiEngineSettings(settings: EngineSettings | null | undefined): EngineSettings {
@@ -859,48 +1543,49 @@ async function startAnalysis(engine: LocalEngine, fen: string, requestId: string
   const engineSettings = ensureXiangqiEngineSettings(engine.settings);
 
   await invoke("start_xiangqi_analysis", {
-    request: {
+    request: buildAnalyzeRequest(engine, fen, {
       requestId,
-      engine: {
-        id: engine.id,
-        name: engine.name,
-        path: engine.path,
-        protocol: engine.protocol ?? "uci",
-        threads: getNumericSetting(engineSettings, "Threads", 1),
-        hash: getNumericSetting(engineSettings, "Hash", 64),
-        moveTimeMs: goMode.t === "Time" ? goMode.c : null,
-      },
-      fen,
-      moves: [],
-      depth: goMode.t === "Depth" ? goMode.c : DEFAULT_XIANGQI_DEPTH,
+      goMode,
       multipv: getNumericSetting(engineSettings, "MultiPV", 1),
-    },
+      settings: engineSettings,
+    }),
   });
+}
+
+function buildAnalyzeRequest(
+  engine: LocalEngine,
+  fen: string,
+  options: {
+    requestId?: string;
+    goMode: XiangqiGoMode;
+    multipv: number;
+    settings: EngineSettings;
+  },
+) {
+  const goMode = normalizeXiangqiGoMode(options.goMode);
+  const depth = goMode.t === "Depth" ? goMode.c : DEFAULT_XIANGQI_DEPTH;
+
+  return {
+    requestId: options.requestId,
+    engine: {
+      id: engine.id,
+      name: engine.name,
+      path: engine.path,
+      protocol: engine.protocol ?? "uci",
+      threads: getNumericSetting(options.settings, "Threads", 1),
+      hash: getNumericSetting(options.settings, "Hash", 64),
+      moveTimeMs: goMode.t === "Time" ? goMode.c : null,
+    },
+    fen,
+    moves: [],
+    depth,
+    multipv: options.multipv,
+    goMode,
+  };
 }
 
 async function stopXiangqiAnalysis(requestId?: string): Promise<void> {
   await invoke("stop_analysis", { requestId: requestId ?? null });
-}
-
-function formatScore(score: string): string {
-  const [kind, raw] = score.split(/\s+/);
-  const value = Number(raw);
-  if (kind === "cp" && Number.isFinite(value)) {
-    return `${value >= 0 ? "+" : ""}${(value / 100).toFixed(2)}`;
-  }
-  if (kind === "mate" && Number.isFinite(value)) {
-    return `#${value}`;
-  }
-  return score || "-";
-}
-
-function formatMoveFromFen(fen: string, move: ReturnType<typeof parseUciMove>): string {
-  if (!move) return "";
-  try {
-    return formatXiangqiMove(parseFen(fen), move, "chinese");
-  } catch {
-    return `${move.from}${move.to}`;
-  }
 }
 
 type PvToken = {
@@ -913,7 +1598,7 @@ type PvToken = {
   fenAfter: string;
 };
 
-function buildPvTokens(fen: string, pv: string[]): PvToken[] {
+function buildPvTokens(fen: string, pv: string[], limit: number | null = 12): PvToken[] {
   let position: XiangqiPosition;
   try {
     position = parseFen(fen);
@@ -923,7 +1608,7 @@ function buildPvTokens(fen: string, pv: string[]): PvToken[] {
 
   const tokens: PvToken[] = [];
   let previousMoveNumber = 0;
-  for (const token of pv.slice(0, 12)) {
+  for (const token of limit === null ? pv : pv.slice(0, limit)) {
     const move = parseUciMove(token);
     if (!move) {
       continue;
@@ -949,6 +1634,16 @@ function buildPvTokens(fen: string, pv: string[]): PvToken[] {
     }
   }
   return tokens;
+}
+
+function convertXiangqiLogs(logs: string[]): EngineLog[] {
+  return logs.map((line) => {
+    const gui = line.match(/^gui:\s?(.*)$/i);
+    if (gui) return { type: "gui", value: gui[1] };
+    const engine = line.match(/^engine:\s?(.*)$/i);
+    if (engine) return { type: "engine", value: engine[1] };
+    return { type: "engine", value: line };
+  });
 }
 
 function PreviewBoard({ fen }: { fen: string }) {

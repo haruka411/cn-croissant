@@ -76,9 +76,8 @@ function GameNotation({ topBar, controls }: { topBar?: boolean; controls?: React
 
   const [invisibleValue, setInvisible] = useAtom(currentInvisibleAtom);
   const invisible = topBar && invisibleValue;
-  const showVariations = useAtomValue(currentShowVariationsAtom);
   const showComments = useAtomValue(currentShowCommentsAtom);
-  const [tableView, setTableView] = useAtom(tableViewAtom);
+  const [tableView] = useAtom(tableViewAtom);
   const colorScheme = useColorScheme();
 
   const keyMap = useAtomValue(keyMapAtom);
@@ -211,7 +210,6 @@ const RenderVariationTree = memo(
             <React.Fragment key={variation.fen}>
               <CompleteMoveCell
                 targetRef={targetRef}
-                annotations={variation.annotations}
                 comment={variation.comment}
                 halfMoves={variation.halfMoves}
                 move={variation.san}
@@ -232,7 +230,6 @@ const RenderVariationTree = memo(
         {variations.length > 0 && (
           <CompleteMoveCell
             targetRef={targetRef}
-            annotations={variations[0].annotations}
             comment={variations[0].comment}
             halfMoves={variations[0].halfMoves}
             move={variations[0].san}
@@ -470,7 +467,6 @@ const TableNotation = memo(function TableNotation({
                         <Box key={variation.fen} className={styles.variationBorder} mb={4}>
                           <CompleteMoveCell
                             targetRef={targetRef}
-                            annotations={variation.annotations}
                             comment={variation.comment}
                             halfMoves={variation.halfMoves}
                             move={variation.san}
@@ -534,7 +530,6 @@ function RowSegment({
         {white ? (
           <CompleteMoveCell
             targetRef={targetRef}
-            annotations={white.annotations}
             comment={white.comment}
             halfMoves={white.halfMoves}
             move={white.san}
@@ -554,7 +549,6 @@ function RowSegment({
         {black ? (
           <CompleteMoveCell
             targetRef={targetRef}
-            annotations={black.annotations}
             comment={black.comment}
             halfMoves={black.halfMoves}
             move={black.san}

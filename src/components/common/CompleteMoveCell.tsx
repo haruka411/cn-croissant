@@ -16,7 +16,6 @@ import { useStore } from "zustand";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import Comment from "@/components/common/Comment";
 import { currentTabAtom } from "@/state/atoms";
-import type { Annotation } from "@/utils/annotation";
 import { hasMorePriority, stripClock } from "@/utils/chess";
 import { getTabFile } from "@/utils/tabs";
 import { type TreeNode, treeIterator } from "@/utils/treeReducer";
@@ -62,7 +61,6 @@ function CompleteMoveCell({
   move,
   fen,
   comment,
-  annotations,
   showComments,
   first,
   targetRef,
@@ -71,7 +69,6 @@ function CompleteMoveCell({
 }: {
   halfMoves: number;
   comment: string;
-  annotations: Annotation[];
   showComments: boolean;
   move?: string | null;
   fen?: string;
@@ -128,7 +125,6 @@ function CompleteMoveCell({
               <MoveCell
                 ref={ref}
                 move={move}
-                annotations={annotations}
                 isStart={isStart}
                 isCurrentVariation={isCurrentVariation}
                 onClick={() => goToMove(movePath)}
@@ -207,7 +203,6 @@ export default memo(CompleteMoveCell, (prev, next) => {
     prev.move === next.move &&
     prev.fen === next.fen &&
     prev.comment === next.comment &&
-    equal(prev.annotations, next.annotations) &&
     prev.showComments === next.showComments &&
     prev.first === next.first &&
     equal(prev.movePath, next.movePath) &&

@@ -204,7 +204,6 @@ export async function saveToFile({
         headers: store.getState().headers,
         comments: true,
         extraMarkups: true,
-        glyphs: true,
         variations: true,
     })}\n\n`;
 

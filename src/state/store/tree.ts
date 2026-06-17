@@ -1,5 +1,5 @@
 import type { DrawShape } from "@lichess-org/chessground/draw";
-import { isNormal, type Move, parseUci } from "chessops";
+import { type Move } from "chessops";
 import { INITIAL_FEN, makeFen } from "chessops/fen";
 import { makeSan, parseSan } from "chessops/san";
 import { type Draft, produce } from "immer";
@@ -7,11 +7,9 @@ import { createStore, type StateCreator } from "zustand";
 import { persist } from "zustand/middleware";
 import type { BestMoves, Outcome, Score } from "@/bindings";
 import { createDebouncedSessionStorage } from "./debouncedStorage";
-import { ANNOTATION_INFO, type Annotation } from "@/utils/annotation";
 import { getPGN } from "@/utils/chess";
 import { parseSanOrUci, positionFromFen } from "@/utils/chessops";
 import { isPrefix } from "@/utils/misc";
-import { getAnnotation } from "@/utils/score";
 import { playSound } from "@/utils/sound";
 import {
     createNode,
@@ -39,8 +37,6 @@ export interface TreeStoreState extends TreeState {
     nextBranching: () => void;
     previousBranching: () => void;
 
-    goToAnnotation: (annotation: Annotation, color: "white" | "black") => void;
-
     makeMove: (args: {
         payload: string | Move;
         changePosition?: boolean;
@@ -60,7 +56,6 @@ export interface TreeStoreState extends TreeState {
 
     setStart: (start: number[]) => void;
 
-    setAnnotation: (payload: Annotation) => void;
     setComment: (payload: string) => void;
     setHeaders: (payload: GameHeaders) => void;
     setResult: (payload: Outcome) => void;
@@ -77,7 +72,6 @@ export interface TreeStoreState extends TreeState {
             novelty: boolean;
             is_sacrifice: boolean;
         }[],
-        options?: { showVariations: boolean },
     ) => void;
 
     setReportInProgress: (value: boolean) => void;
@@ -154,34 +148,6 @@ export const createTreeStore = (id?: string, initialTree?: TreeState) => {
                 ...state,
                 position: state.position.slice(0, -1),
             })),
-
-        goToAnnotation: (annotation, color) =>
-            set(
-                produce((state) => {
-                    const colorN = color === "white" ? 1 : 0;
-
-                    let p: number[] = state.position;
-                    let node = getNodeAtPath(state.root, p);
-                    while (true) {
-                        if (node.children.length === 0) {
-                            p = [];
-                        } else {
-                            p.push(0);
-                        }
-
-                        node = getNodeAtPath(state.root, p);
-
-                        if (
-                            node.annotations.includes(annotation) &&
-                            node.halfMoves % 2 === colorN
-                        ) {
-                            break;
-                        }
-                    }
-
-                    state.position = p;
-                }),
-            ),
 
         makeMove: ({ payload, changePosition, mainline, clock, changeHeaders = true }) => {
             set(
@@ -395,7 +361,6 @@ export const createTreeStore = (id?: string, initialTree?: TreeState) => {
                 headers: null,
                 comments: false,
                 extraMarkups: false,
-                glyphs: true,
                 variations: false,
                 path,
             });
@@ -407,7 +372,6 @@ export const createTreeStore = (id?: string, initialTree?: TreeState) => {
                 headers,
                 comments: true,
                 extraMarkups: true,
-                glyphs: true,
                 variations: true,
             });
             navigator.clipboard.writeText(pgn);
@@ -417,27 +381,6 @@ export const createTreeStore = (id?: string, initialTree?: TreeState) => {
                 produce((state) => {
                     state.dirty = true;
                     state.headers.start = start;
-                }),
-            ),
-        setAnnotation: (payload) =>
-            set(
-                produce((state) => {
-                    state.dirty = true;
-                    const node = getNodeAtPath(state.root, state.position);
-                    if (node) {
-                        if (node.annotations.includes(payload)) {
-                            node.annotations = node.annotations.filter((a) => a !== payload);
-                        } else {
-                            const newAnnotations = node.annotations.filter(
-                                (a) =>
-                                    !ANNOTATION_INFO[a].group ||
-                                    ANNOTATION_INFO[a].group !== ANNOTATION_INFO[payload].group,
-                            );
-                            node.annotations = [...newAnnotations, payload].sort((a, b) =>
-                                ANNOTATION_INFO[a].nag > ANNOTATION_INFO[b].nag ? 1 : -1,
-                            );
-                        }
-                    }
                 }),
             ),
         setComment: (payload) =>
@@ -485,11 +428,11 @@ export const createTreeStore = (id?: string, initialTree?: TreeState) => {
                     }
                 }),
             ),
-        addAnalysis: (analysis, options) =>
+        addAnalysis: (analysis) =>
             set(
                 produce((state) => {
                     state.dirty = true;
-                    addAnalysis(state, analysis, options);
+                    addAnalysis(state, analysis);
                 }),
             ),
 
@@ -697,112 +640,15 @@ function addAnalysis(
         novelty: boolean;
         is_sacrifice: boolean;
     }[],
-    options?: { showVariations: boolean },
 ) {
     let cur = state.root;
     let i = 0;
-    let parent: TreeNode | undefined;
 
     while (cur !== undefined && i < analysis.length) {
         const [pos] = positionFromFen(cur.fen);
         if (pos && !pos.isEnd() && analysis[i].best.length > 0) {
             cur.score = analysis[i].best[0].score;
-            let prevScore = null;
-            let prevprevScore = null;
-            let prevMoves: BestMoves[] = [];
-            if (i > 0) {
-                prevScore = analysis[i - 1].best[0].score;
-                prevMoves = analysis[i - 1].best;
-            }
-            if (i > 1) {
-                prevprevScore = analysis[i - 2].best[0].score;
-            }
-            const curScore = analysis[i].best[0].score;
-            const color = cur.halfMoves % 2 === 1 ? "white" : "black";
-            const annotation = getAnnotation(
-                prevprevScore?.value || null,
-                prevScore?.value || null,
-                curScore.value,
-                color,
-                prevMoves,
-                analysis[i].is_sacrifice,
-                cur.san || "",
-            );
-            if (annotation) {
-                cur.annotations = [...cur.annotations, annotation];
-
-                if (
-                    options?.showVariations &&
-                    (annotation === "??" || annotation === "?" || annotation === "?!") &&
-                    parent &&
-                    i > 0 &&
-                    analysis[i - 1].best.length > 0
-                ) {
-                    const bestMoveUci = analysis[i - 1].best[0].uciMoves[0];
-                    const [parentPos] = positionFromFen(parent.fen);
-                    if (parentPos) {
-                        const bestMove = parseUci(bestMoveUci);
-                        if (bestMove) {
-                            const existingChild = parent.children.find(
-                                (c) =>
-                                    c.move &&
-                                    isNormal(c.move) &&
-                                    isNormal(bestMove) &&
-                                    c.move.from === bestMove.from &&
-                                    c.move.to === bestMove.to &&
-                                    c.move.promotion === bestMove.promotion,
-                            );
-
-                            if (!existingChild) {
-                                const san = makeSan(parentPos, bestMove);
-                                parentPos.play(bestMove);
-                                const newFen = makeFen(parentPos.toSetup());
-                                const variationNode = createNode({
-                                    fen: newFen,
-                                    move: bestMove,
-                                    san,
-                                    halfMoves: parent.halfMoves + 1,
-                                });
-
-                                let currentVarNode = variationNode;
-                                const currentVarPos = parentPos;
-
-                                const pv = analysis[i - 1].best[0].uciMoves;
-                                if (pv.length > 1) {
-                                    for (let j = 1; j < Math.min(pv.length, 10); j++) {
-                                        const nextMoveUci = pv[j];
-                                        const nextMove = parseUci(nextMoveUci);
-                                        if (nextMove) {
-                                            const nextSan = makeSan(currentVarPos, nextMove);
-                                            currentVarPos.play(nextMove);
-                                            const nextFen = makeFen(currentVarPos.toSetup());
-                                            const nextNode = createNode({
-                                                fen: nextFen,
-                                                move: nextMove,
-                                                san: nextSan,
-                                                halfMoves: currentVarNode.halfMoves + 1,
-                                            });
-                                            currentVarNode.children.push(nextNode);
-                                            currentVarNode = nextNode;
-                                        }
-                                    }
-                                }
-
-                                parent.children.push(variationNode);
-                            }
-                        }
-                    }
-                }
-            }
-            if (analysis[i].novelty) {
-                cur.annotations = [...cur.annotations, "N"];
-            }
-            cur.annotations = [...new Set(cur.annotations)];
-            cur.annotations.sort((a, b) =>
-                ANNOTATION_INFO[a].nag > ANNOTATION_INFO[b].nag ? 1 : -1,
-            );
         }
-        parent = cur;
         cur = cur.children[0];
         i++;
     }

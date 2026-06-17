@@ -33,7 +33,6 @@ function PgnInput() {
     () =>
       getPGN(root, {
         headers: headers,
-        glyphs: true,
         comments: true,
         variations: true,
         extraMarkups: true,
@@ -45,7 +44,6 @@ function PgnInput() {
     () =>
       getPGN(root, {
         headers: headers,
-        glyphs: options.glyphs,
         comments: options.comments,
         variations: options.variations,
         extraMarkups: options.extraMarkups,
@@ -68,12 +66,6 @@ function PgnInput() {
           size="xs"
           checked={options.comments}
           onChange={() => setOptions({ ...options, comments: !options.comments })}
-        />
-        <Checkbox
-          label={t("PgnInput.Glyphs")}
-          size="xs"
-          checked={options.glyphs}
-          onChange={() => setOptions({ ...options, glyphs: !options.glyphs })}
         />
         <Checkbox
           label={t("PgnInput.Variations")}

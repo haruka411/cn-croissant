@@ -2,7 +2,6 @@ import type { DrawShape } from "@lichess-org/chessground/draw";
 import type { Move } from "chessops";
 import { INITIAL_FEN } from "chessops/fen";
 import type { Outcome, Score } from "@/bindings";
-import type { Annotation } from "./annotation";
 import { positionFromFen } from "./chessops";
 
 export interface TreeState {
@@ -22,7 +21,7 @@ export interface TreeNode {
     depth: number | null;
     halfMoves: number;
     shapes: DrawShape[];
-    annotations: Annotation[];
+    annotations: string[];
     comment: string;
     clock?: number;
 }

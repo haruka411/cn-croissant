@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 import {
   autoSaveAtom,
   clearXiangqiDrawingsAtom,
+  currentGameStartFromCurrentAtom,
   currentGameStateAtom,
   currentTabAtom,
   eraseDrawablesOnClickAtom,
@@ -51,6 +52,7 @@ function XiangqiBoardControls({
   const keyMap = useAtomValue(keyMapAtom);
   const [currentTab, setCurrentTab] = useAtom(currentTabAtom);
   const setGameState = useSetAtom(currentGameStateAtom);
+  const setGameStartFromCurrent = useSetAtom(currentGameStartFromCurrentAtom);
   const clearXiangqiDrawings = useSetAtom(clearXiangqiDrawingsAtom);
   const autoSave = useAtomValue(autoSaveAtom);
   const eraseDrawablesOnClick = useAtomValue(eraseDrawablesOnClickAtom);
@@ -64,6 +66,9 @@ function XiangqiBoardControls({
   function changeTabType() {
     setCurrentTab((tab) => {
       if (tab.type === "analysis") {
+        setGameStartFromCurrent(true);
+        setGameState("settingUp");
+      } else {
         setGameState("settingUp");
       }
       return { ...tab, type: tab.type === "analysis" ? "play" : "analysis" };

@@ -62,6 +62,7 @@ export interface XiangqiStoreState {
   previousBranching: () => void;
 
   deleteMove: (path?: number[]) => void;
+  deleteMovesFrom: (path: number[]) => void;
   promoteVariation: (path: number[]) => void;
   promoteToMainline: (path: number[]) => void;
 
@@ -298,6 +299,23 @@ export function createXiangqiStore(id?: string): XiangqiStore {
           ...state,
           root,
           path: isPrefix(path, state.path) ? parentPath : safePath(root, state.path),
+          dirty: true,
+        };
+      }),
+
+    deleteMovesFrom: (path) =>
+      set((state) => {
+        if (path.length === 0) return state;
+        const root = cloneGameNode(state.root);
+        const parentPath = path.slice(0, -1);
+        const parent = safeNode(root, parentPath);
+        const index = path[path.length - 1];
+        if (!parent.children[index]) return state;
+        parent.children.splice(index, 1);
+        return {
+          ...state,
+          root,
+          path: parentPath,
           dirty: true,
         };
       }),

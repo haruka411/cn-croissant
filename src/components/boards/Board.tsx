@@ -4,11 +4,13 @@ import type { Piece } from "chessops";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
+import type { GoMode } from "@/bindings";
 import type { ChessgroundRef } from "@/chessground/Chessground";
 import {
   boardImageAtom,
   currentGameStateAtom,
   currentPlayersAtom,
+  currentTabAtom,
   eraseDrawablesOnClickAtom,
   moveHighlightAtom,
   moveMethodAtom,
@@ -37,6 +39,7 @@ import {
   type XiangqiDrawShape,
   type XiangqiMove,
 } from "@/xiangqi/xiangqi";
+import { parseXiangqiEvaluation, scoreToEvalFill } from "@/xiangqi/evaluation";
 import { useXiangqiStore, useXiangqiStoreApi } from "@/xiangqi/store";
 import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
 import { playSound } from "@/utils/sound";
@@ -83,6 +86,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const moveMethod = useAtomValue(moveMethodAtom);
   const gameState = useAtomValue(currentGameStateAtom);
   const players = useAtomValue(currentPlayersAtom);
+  const currentTab = useAtomValue(currentTabAtom);
   const eraseDrawablesOnClick = useAtomValue(eraseDrawablesOnClickAtom);
   const showVariationArrows = useAtomValue(showVariationArrowsAtom);
   const snapArrows = useAtomValue(snapArrowsAtom);
@@ -90,6 +94,12 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const engineEvaluation = useAtomValue(xiangqiEvaluationAtom);
   const clearDrawingsSignal = useAtomValue(xiangqiClearDrawingsSignalAtom);
   const previousClearDrawingsSignal = useRef(clearDrawingsSignal);
+  const clockRef = useRef<XiangqiClockSnapshot>({
+    red: whiteTime,
+    black: blackTime,
+    redIncrement: players.white?.timeControl?.increment ?? 0,
+    blackIncrement: players.black?.timeControl?.increment ?? 0,
+  });
   const [displayedEngineEval, setDisplayedEngineEval] = useState<{
     redCentipawns: number;
     label: string;
@@ -125,6 +135,20 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     clearCurrentNodeShapes();
   }, [clearDrawingsSignal, clearCurrentNodeShapes]);
 
+  useEffect(() => {
+    clockRef.current = {
+      red: whiteTime,
+      black: blackTime,
+      redIncrement: players.white?.timeControl?.increment ?? 0,
+      blackIncrement: players.black?.timeControl?.increment ?? 0,
+    };
+  }, [
+    blackTime,
+    players.black?.timeControl?.increment,
+    players.white?.timeControl?.increment,
+    whiteTime,
+  ]);
+
   function makeMove(move: XiangqiMove) {
     if (viewOnly && !editingMode) return;
 
@@ -142,7 +166,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   }
 
   const enginePlayer =
-    gameState === "playing"
+    currentTab?.type === "play" && gameState === "playing"
       ? position.turn === "red"
         ? players.white.type === "engine"
           ? players.white
@@ -157,8 +181,9 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   useEffect(() => {
     if (!engine || engineThinking || editingMode || viewOnly) return;
 
+    let canceled = false;
     const requestedFen = currentNode.fen;
-    const requestKey = `${engine.id}:${requestedFen}`;
+    const requestKey = `${engine.id}:${currentNode.id}:${requestedFen}`;
     if (lastEngineRequest.current === requestKey) return;
     lastEngineRequest.current = requestKey;
     setSelected(null);
@@ -167,10 +192,11 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     void requestXiangqiBestMove(
       engine,
       currentNode.fen,
-      enginePlayer.go?.t === "Depth" ? enginePlayer.go.c : 8,
+      resolveXiangqiGameGoMode(enginePlayer.go, enginePlayer.timeControl ? clockRef.current : null),
       enginePlayer.engineSettings,
     )
       .then((bestMove) => {
+        if (canceled) return;
         if (!bestMove) return;
         const parsed = parseUciMove(bestMove);
         if (!parsed) return;
@@ -186,10 +212,18 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
         onMove?.(bestMove, result.position.turn === "red" ? "black" : "red");
       })
       .finally(() => {
-        setEngineThinking(false);
+        if (!canceled) {
+          setEngineThinking(false);
+        }
       });
+
+    return () => {
+      canceled = true;
+    };
   }, [
     currentNode.fen,
+    currentNode.id,
+    currentTab?.type,
     editingMode,
     engine,
     enginePlayer,
@@ -404,45 +438,21 @@ function formatClock(milliseconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-function parseXiangqiEvaluation(
-  score: string,
-  turn: "red" | "black",
-): { redCentipawns: number; label: string } | null {
-  const [kind, raw] = score.split(/\s+/);
-  const value = Number(raw);
-  if (!Number.isFinite(value)) return null;
-
-  const redValue = turn === "red" ? value : -value;
-  if (kind === "cp") {
-    return {
-      redCentipawns: redValue,
-      label: `${redValue >= 0 ? "+" : ""}${(redValue / 100).toFixed(2)}`,
-    };
-  }
-
-  if (kind === "mate") {
-    return {
-      redCentipawns: Math.sign(redValue || 1) * 1200,
-      label: `${redValue >= 0 ? "+" : "-"}M${Math.abs(redValue)}`,
-    };
-  }
-
-  return null;
-}
-
-function scoreToEvalFill(redCentipawns: number): number {
-  const winChance = 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * redCentipawns)) - 1);
-  return Math.max(3, Math.min(97, winChance));
-}
-
 type EngineAnalysis = {
   bestmove: string;
+};
+
+type XiangqiClockSnapshot = {
+  red?: number;
+  black?: number;
+  redIncrement: number;
+  blackIncrement: number;
 };
 
 async function requestXiangqiBestMove(
   engine: LocalEngine,
   fen: string,
-  depth: number,
+  goMode: GoMode,
   settings: EngineSettings | undefined,
 ): Promise<string | null> {
   const engineSettings = settings ?? engine.settings ?? [];
@@ -459,13 +469,40 @@ async function requestXiangqiBestMove(
       },
       fen,
       moves: [],
-      depth: Math.max(1, Math.min(depth, 20)),
+      depth: goMode.t === "Depth" ? Math.max(1, Math.min(goMode.c, 20)) : 8,
       multipv: 1,
+      goMode,
     },
   });
 
   if (!result.bestmove || result.bestmove === "0000") return null;
   return result.bestmove;
+}
+
+function resolveXiangqiGameGoMode(goMode: GoMode | undefined, clock: XiangqiClockSnapshot | null) {
+  if (clock) {
+    return {
+      t: "PlayersTime",
+      c: {
+        white: toUciClockValue(clock.red),
+        black: toUciClockValue(clock.black),
+        winc: toUciClockValue(clock.redIncrement),
+        binc: toUciClockValue(clock.blackIncrement),
+      },
+    } satisfies GoMode;
+  }
+
+  if (!goMode || goMode.t === "Infinite" || goMode.t === "PlayersTime") {
+    return { t: "Depth", c: 8 } satisfies GoMode;
+  }
+
+  return goMode;
+}
+
+function toUciClockValue(value: number | undefined) {
+  const MAX_UCI_TIME = 2_147_483_647;
+  if (value === undefined || !Number.isFinite(value)) return MAX_UCI_TIME;
+  return Math.max(1, Math.min(Math.round(value), MAX_UCI_TIME));
 }
 
 export default memo(Board);

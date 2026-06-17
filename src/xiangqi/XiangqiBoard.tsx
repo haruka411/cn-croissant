@@ -60,16 +60,16 @@ const SVG_HEIGHT = 900;
 const DRAW_BRUSH_SEQUENCE: XiangqiDrawBrush[] = ["green", "red", "blue", "yellow"];
 const DRAW_BRUSHES: Record<
   XiangqiDrawBrush,
-  { color: string; opacity: number; lineWidth: number }
+  { key: string; color: string; opacity: number; lineWidth: number }
 > = {
-  green: { color: "#15781b", opacity: 0.74, lineWidth: 10 },
-  red: { color: "#882020", opacity: 0.74, lineWidth: 10 },
-  blue: { color: "#003088", opacity: 0.74, lineWidth: 10 },
-  yellow: { color: "#e68f00", opacity: 0.78, lineWidth: 10 },
-  paleGreen: { color: "#15781b", opacity: 0.32, lineWidth: 12 },
-  paleRed: { color: "#882020", opacity: 0.32, lineWidth: 12 },
-  paleBlue: { color: "#003088", opacity: 0.32, lineWidth: 12 },
-  variation: { color: "#9b59b6", opacity: 0.68, lineWidth: 7.5 },
+  green: { key: "g", color: "#15781b", opacity: 1, lineWidth: 10 },
+  red: { key: "r", color: "#882020", opacity: 1, lineWidth: 10 },
+  blue: { key: "b", color: "#003088", opacity: 1, lineWidth: 10 },
+  yellow: { key: "y", color: "#e68f00", opacity: 1, lineWidth: 10 },
+  paleGreen: { key: "pg", color: "#15781b", opacity: 0.4, lineWidth: 15 },
+  paleRed: { key: "pr", color: "#882020", opacity: 0.4, lineWidth: 15 },
+  paleBlue: { key: "pb", color: "#003088", opacity: 0.4, lineWidth: 15 },
+  variation: { key: "v", color: "#9b59b6", opacity: 0.8, lineWidth: 10 },
 };
 
 type GridPoint = readonly [file: number, rank: number];
@@ -552,6 +552,22 @@ function DrawShapes({
       aria-hidden="true"
       focusable="false"
     >
+      <defs>
+        {Object.values(DRAW_BRUSHES).map((brush) => (
+          <marker
+            id={arrowMarkerId(brush.key)}
+            key={brush.key}
+            orient="auto"
+            overflow="visible"
+            markerWidth={4}
+            markerHeight={4}
+            refX={2.05}
+            refY={2}
+          >
+            <path d="M0,0 V4 L3,2 Z" fill={brush.color} />
+          </marker>
+        ))}
+      </defs>
       {shapes.map((shape, index) =>
         shape.dest ? (
           <DrawArrow
@@ -580,26 +596,24 @@ function DrawArrow({
   const to = svgPoint(toFile, toRank, orientation);
   const brush = brushForShape(shape);
   const strokeWidth = brush.lineWidth * 1.6;
-  const geometry = arrowGeometry(from, to, strokeWidth);
+  const geometry = arrowGeometry(from, to);
 
   if (!geometry) {
     return <DrawCircle shape={shape} orientation={orientation} />;
   }
 
   return (
-    <g>
-      <line
-        x1={geometry.start.x}
-        y1={geometry.start.y}
-        x2={geometry.lineEnd.x}
-        y2={geometry.lineEnd.y}
-        stroke={brush.color}
-        strokeWidth={strokeWidth}
-        strokeOpacity={brush.opacity * 0.92}
-        strokeLinecap="round"
-      />
-      <polygon points={geometry.headPoints} fill={brush.color} fillOpacity={brush.opacity} />
-    </g>
+    <line
+      x1={geometry.start.x}
+      y1={geometry.start.y}
+      x2={geometry.end.x}
+      y2={geometry.end.y}
+      stroke={brush.color}
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      markerEnd={`url(#${arrowMarkerId(brush.key)})`}
+      opacity={brush.opacity}
+    />
   );
 }
 
@@ -630,11 +644,7 @@ function brushForShape(shape: XiangqiDrawShape) {
   };
 }
 
-function arrowGeometry(
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  strokeWidth: number,
-) {
+function arrowGeometry(from: { x: number; y: number }, to: { x: number; y: number }) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const length = Math.hypot(dx, dy);
@@ -642,42 +652,25 @@ function arrowGeometry(
 
   const ux = dx / length;
   const uy = dy / length;
-  const px = -uy;
-  const py = ux;
   const endpointClearance = Math.min(8, length * 0.06);
   const startClearance = Math.min(10, length * 0.08);
-  const headLength = Math.min(strokeWidth * 2.2, length * 0.28);
-  const headWidth = strokeWidth * 2.55;
   const start = {
     x: from.x + ux * startClearance,
     y: from.y + uy * startClearance,
   };
-  const tip = {
+  const end = {
     x: to.x - ux * endpointClearance,
     y: to.y - uy * endpointClearance,
-  };
-  const base = {
-    x: tip.x - ux * headLength,
-    y: tip.y - uy * headLength,
-  };
-  const lineEnd = {
-    x: tip.x - ux * headLength * 0.6,
-    y: tip.y - uy * headLength * 0.6,
-  };
-  const left = {
-    x: base.x + px * (headWidth / 2),
-    y: base.y + py * (headWidth / 2),
-  };
-  const right = {
-    x: base.x - px * (headWidth / 2),
-    y: base.y - py * (headWidth / 2),
   };
 
   return {
     start,
-    lineEnd,
-    headPoints: `${tip.x},${tip.y} ${left.x},${left.y} ${right.x},${right.y}`,
+    end,
   };
+}
+
+function arrowMarkerId(key: string): string {
+  return `xiangqi-arrowhead-${key}`;
 }
 
 function shapeKey(shape: XiangqiDrawShape): string {

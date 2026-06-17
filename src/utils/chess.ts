@@ -5,7 +5,6 @@ import { INITIAL_FEN, makeFen, parseFen } from "chessops/fen";
 import { isPawns, parseComment } from "chessops/pgn";
 import { makeSan, parseSan } from "chessops/san";
 import { commands, type Outcome, type Score, type Token } from "@/bindings";
-import { ANNOTATION_INFO, isBasicAnnotation, NAG_INFO } from "./annotation";
 import { parseSanOrUci, positionFromFen } from "./chessops";
 import { harmonicMean, isPrefix, mean } from "./misc";
 import { formatScore, getAccuracy, getCPLoss, INITIAL_SCORE } from "./score";
@@ -48,7 +47,6 @@ export const makeClk = (seconds: number): string => {
 export function getMoveText(
     tree: TreeNode,
     opt: {
-        glyphs: boolean;
         comments: boolean;
         extraMarkups: boolean;
         isFirst?: boolean;
@@ -67,14 +65,6 @@ export function getMoveText(
             moveText += `${moveNumber}. `;
         }
         moveText += tree.san;
-        if (opt.glyphs) {
-            for (const annotation of tree.annotations) {
-                if (annotation === "") continue;
-                moveText += isBasicAnnotation(annotation)
-                    ? tree.annotations
-                    : ` $${ANNOTATION_INFO[annotation].nag}`;
-            }
-        }
         moveText += " ";
     }
 
@@ -219,7 +209,6 @@ export function getPGN(
     tree: TreeNode,
     {
         headers,
-        glyphs,
         comments,
         variations,
         extraMarkups,
@@ -227,7 +216,6 @@ export function getPGN(
         path = null,
     }: {
         headers: GameHeaders | null;
-        glyphs: boolean;
         comments: boolean;
         variations: boolean;
         extraMarkups: boolean;
@@ -249,7 +237,6 @@ export function getPGN(
     pgn += "\n";
     if (root && tree.comment !== null) {
         pgn += `${getMoveText(tree, {
-            glyphs,
             comments,
             extraMarkups,
         })}`;
@@ -258,13 +245,11 @@ export function getPGN(
         ? tree.children.slice(1).map(
               (variation) =>
                   `${getMoveText(variation, {
-                      glyphs,
                       comments,
                       extraMarkups,
                       isFirst: true,
                   })} ${getPGN(variation, {
                       headers: null,
-                      glyphs,
                       comments,
                       variations,
                       extraMarkups,
@@ -276,7 +261,6 @@ export function getPGN(
     if (tree.children.length > 0) {
         const child = tree.children[path ? path[0] : 0];
         pgn += getMoveText(child, {
-            glyphs: glyphs,
             comments,
             extraMarkups,
             isFirst: root,
@@ -291,7 +275,6 @@ export function getPGN(
     if (tree.children.length > 0) {
         pgn += getPGN(tree.children[path ? path[0] : 0], {
             headers: null,
-            glyphs,
             comments,
             variations,
             extraMarkups,
@@ -420,11 +403,6 @@ function innerParsePGN(tokens: Token[], fen: string = INITIAL_FEN, halfMoves = 0
                 prevNode.children.push(newTree.root.children[0]);
             }
         } else if (token.type === "ParenClose") {
-        } else if (token.type === "Nag") {
-            root.annotations.push(NAG_INFO.get(token.value) || "");
-            root.annotations.sort((a, b) => {
-                return ANNOTATION_INFO[a].nag - ANNOTATION_INFO[b].nag;
-            });
         } else if (token.type === "San") {
             const [pos, error] = positionFromFen(root.fen);
             if (error) {
@@ -539,32 +517,12 @@ type ColorMap<T> = {
 };
 
 export function getGameStats(root: TreeNode) {
-    const whiteAnnotations = {
-        "??": 0,
-        "?": 0,
-        "?!": 0,
-        "!!": 0,
-        "!": 0,
-        "!?": 0,
-    };
-
-    const blackAnnotations = {
-        "??": 0,
-        "?": 0,
-        "?!": 0,
-        "!!": 0,
-        "!": 0,
-        "!?": 0,
-    };
-
     if (root.children.length === 0) {
         return {
             whiteCPL: 0,
             blackCPL: 0,
             whiteAccuracy: 0,
             blackAccuracy: 0,
-            whiteAnnotations,
-            blackAnnotations,
         };
     }
 
@@ -580,15 +538,6 @@ export function getGameStats(root: TreeNode) {
     let node = root;
     while (node.children.length > 0) {
         node = node.children[0];
-        for (const annotation of node.annotations) {
-            if (isBasicAnnotation(annotation)) {
-                if (node.halfMoves % 2 === 1) {
-                    whiteAnnotations[annotation]++;
-                } else {
-                    blackAnnotations[annotation]++;
-                }
-            }
-        }
         const color = node.halfMoves % 2 === 1 ? "white" : "black";
         if (node.score) {
             cplosses[color].push(getCPLoss(prevScore.value, node.score.value, color));
@@ -606,8 +555,6 @@ export function getGameStats(root: TreeNode) {
         blackCPL,
         whiteAccuracy,
         blackAccuracy,
-        whiteAnnotations,
-        blackAnnotations,
     };
 }
 

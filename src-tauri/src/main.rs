@@ -34,6 +34,39 @@ enum EngineProtocol {
     Ucci,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "t", content = "c")]
+enum GoMode {
+    PlayersTime(PlayersTime),
+    Depth(u32),
+    Time(u32),
+    Nodes(u32),
+    Infinite,
+}
+
+impl GoMode {
+    fn to_uci_string(&self) -> String {
+        match self {
+            GoMode::Depth(depth) => format!("go depth {}", depth),
+            GoMode::Time(time) => format!("go movetime {}", time),
+            GoMode::Nodes(nodes) => format!("go nodes {}", nodes),
+            GoMode::PlayersTime(players_time) => format!(
+                "go wtime {} btime {} winc {} binc {}",
+                players_time.white, players_time.black, players_time.winc, players_time.binc
+            ),
+            GoMode::Infinite => "go infinite".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct PlayersTime {
+    white: u32,
+    black: u32,
+    winc: u32,
+    binc: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalEngineConfig {
@@ -66,6 +99,8 @@ struct AnalyzeRequest {
     moves: Vec<String>,
     depth: u32,
     multipv: u32,
+    #[serde(rename = "goMode")]
+    go_mode: Option<GoMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +128,7 @@ struct EngineAnalysisUpdate {
 struct EngineLine {
     multipv: u32,
     depth: u32,
+    nodes: u64,
     score: String,
     pv: Vec<String>,
 }
@@ -213,26 +249,18 @@ fn analyze_position(request: AnalyzeRequest) -> Result<EngineAnalysis, String> {
 
     let mut logs = Vec::new();
     init_engine(&mut engine, &request.engine, request.multipv, &mut logs)?;
-    set_position(
-        &mut engine,
+    send_engine_position(
+        &mut engine.stdin,
         &request.engine.protocol,
         &request.fen,
         &request.moves,
         &mut logs,
     )?;
-    if let Some(move_time_ms) = request.engine.move_time_ms.filter(|value| *value > 0) {
-        send_line(
-            &mut engine,
-            &format!("go movetime {}", move_time_ms),
-            &mut logs,
-        )?;
-    } else {
-        send_line(
-            &mut engine,
-            &format!("go depth {}", request.depth),
-            &mut logs,
-        )?;
-    }
+    let go_mode = match resolve_go_mode(&request) {
+        GoMode::Infinite => GoMode::Depth(request.depth.max(1)),
+        other => other,
+    };
+    send_line(&mut engine, &go_mode.to_uci_string(), &mut logs)?;
 
     let mut lines = BTreeMap::<u32, EngineLine>::new();
     let mut bestmove = String::new();
@@ -542,6 +570,7 @@ struct XiangqiAnalysisProcess {
     fen: String,
     moves: Vec<String>,
     depth: u32,
+    go_mode: GoMode,
     multipv: u32,
     request_id: String,
     lines: BTreeMap<u32, EngineLine>,
@@ -559,6 +588,7 @@ impl XiangqiAnalysisProcess {
         self.fen == request.fen
             && self.moves == request.moves
             && self.depth == request.depth
+            && self.go_mode == resolve_go_mode(request)
             && self.multipv == request.multipv
             && self.engine.threads == request.engine.threads
             && self.engine.hash == request.engine.hash
@@ -571,6 +601,7 @@ impl XiangqiAnalysisProcess {
         self.fen = request.fen.clone();
         self.moves = request.moves.clone();
         self.depth = request.depth;
+        self.go_mode = resolve_go_mode(&request);
         self.multipv = request.multipv;
         self.lines.clear();
         self.bestmove.clear();
@@ -593,12 +624,7 @@ impl XiangqiAnalysisProcess {
             &request.moves,
             &mut self.logs,
         )?;
-        send_engine_go(
-            &mut self.stdin,
-            &request.engine,
-            request.depth,
-            &mut self.logs,
-        )?;
+        send_engine_go(&mut self.stdin, &self.go_mode, &mut self.logs)?;
         self.running = true;
         self.started_at = Instant::now();
         self.last_emit_at = self.started_at;
@@ -660,6 +686,7 @@ fn spawn_xiangqi_analysis_process(
         fen: String::new(),
         moves: Vec::new(),
         depth: request.depth,
+        go_mode: resolve_go_mode(&request),
         multipv: request.multipv,
         request_id: String::new(),
         lines: BTreeMap::new(),
@@ -807,21 +834,6 @@ fn init_engine(
     Ok(())
 }
 
-fn set_position(
-    engine: &mut EngineRuntime,
-    _protocol: &EngineProtocol,
-    fen: &str,
-    moves: &[String],
-    logs: &mut Vec<String>,
-) -> Result<(), String> {
-    let command = if moves.is_empty() {
-        format!("position fen {}", fen)
-    } else {
-        format!("position fen {} moves {}", fen, moves.join(" "))
-    };
-    send_line(engine, &command, logs)
-}
-
 fn configure_engine_options(
     stdin: &mut ChildStdin,
     protocol: &EngineProtocol,
@@ -885,14 +897,27 @@ fn send_engine_position(
 
 fn send_engine_go(
     stdin: &mut ChildStdin,
-    config: &LocalEngineConfig,
-    depth: u32,
+    go_mode: &GoMode,
     logs: &mut Vec<String>,
 ) -> Result<(), String> {
-    if let Some(move_time_ms) = config.move_time_ms.filter(|value| *value > 0) {
-        send_engine_line(stdin, &format!("go movetime {}", move_time_ms), logs)
+    send_engine_line(stdin, &go_mode.to_uci_string(), logs)
+}
+
+fn resolve_go_mode(request: &AnalyzeRequest) -> GoMode {
+    if let Some(go_mode) = request.go_mode.clone() {
+        return match go_mode {
+            GoMode::Depth(depth) => GoMode::Depth(depth.max(1)),
+            GoMode::Time(time) => GoMode::Time(time.max(1)),
+            GoMode::Nodes(nodes) => GoMode::Nodes(nodes.max(1)),
+            GoMode::PlayersTime(players_time) => GoMode::PlayersTime(players_time),
+            GoMode::Infinite => GoMode::Infinite,
+        };
+    }
+
+    if let Some(move_time_ms) = request.engine.move_time_ms.filter(|value| *value > 0) {
+        GoMode::Time(move_time_ms)
     } else {
-        send_engine_line(stdin, &format!("go depth {}", depth), logs)
+        GoMode::Depth(request.depth.max(1))
     }
 }
 
@@ -953,6 +978,7 @@ fn parse_info_line(line: &str) -> Option<EngineLine> {
     }
     let tokens: Vec<&str> = line.split_whitespace().collect();
     let mut depth = 0;
+    let mut nodes = 0;
     let mut multipv = 1;
     let mut score = String::new();
     let mut pv = Vec::new();
@@ -968,6 +994,13 @@ fn parse_info_line(line: &str) -> Option<EngineLine> {
                     .get(i + 1)
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(1);
+                i += 2;
+            }
+            "nodes" => {
+                nodes = tokens
+                    .get(i + 1)
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0);
                 i += 2;
             }
             "score" => {
@@ -996,27 +1029,43 @@ fn parse_info_line(line: &str) -> Option<EngineLine> {
     Some(EngineLine {
         multipv,
         depth,
+        nodes,
         score,
         pv,
     })
 }
 
 fn xiangqi_process_progress(process: &XiangqiAnalysisProcess) -> f64 {
-    if let Some(move_time_ms) = process.engine.move_time_ms.filter(|value| *value > 0) {
-        return ((process.started_at.elapsed().as_millis() as f64 / move_time_ms as f64) * 100.0)
-            .clamp(0.0, 99.9);
-    }
-
-    let max_depth = process
-        .lines
-        .values()
-        .map(|line| line.depth)
-        .max()
-        .unwrap_or(0);
-    if process.depth > 0 {
-        ((max_depth as f64 / process.depth as f64) * 100.0).clamp(0.0, 99.9)
-    } else {
-        0.0
+    match &process.go_mode {
+        GoMode::Time(move_time_ms) => {
+            ((process.started_at.elapsed().as_millis() as f64 / *move_time_ms as f64) * 100.0)
+                .clamp(0.0, 99.9)
+        }
+        GoMode::Depth(depth) => {
+            let max_depth = process
+                .lines
+                .values()
+                .map(|line| line.depth)
+                .max()
+                .unwrap_or(0);
+            ((max_depth as f64 / (*depth).max(1) as f64) * 100.0).clamp(0.0, 99.9)
+        }
+        GoMode::Nodes(nodes) => {
+            let max_nodes = process
+                .lines
+                .values()
+                .map(|line| line.nodes)
+                .max()
+                .unwrap_or(0);
+            ((max_nodes as f64 / (*nodes).max(1) as f64) * 100.0).clamp(0.0, 99.9)
+        }
+        GoMode::PlayersTime(_) | GoMode::Infinite => {
+            if process.lines.is_empty() {
+                0.0
+            } else {
+                99.9
+            }
+        }
     }
 }
 
@@ -1045,7 +1094,7 @@ fn emit_xiangqi_process_update(
                 engine_name: process.engine.name.clone(),
                 bestmove: process.bestmove.clone(),
                 lines: sorted_lines,
-                logs: Vec::new(),
+                logs: process.logs.clone(),
             },
         },
     );

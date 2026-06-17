@@ -6,7 +6,6 @@ import { useHotkeys } from "@mantine/hooks";
 import {
   IconDatabase,
   IconInfoCircle,
-  IconNotes,
   IconTargetArrow,
   IconZoomCheck,
 } from "@tabler/icons-react";
@@ -23,7 +22,7 @@ import {
 import { keyMapAtom } from "@/state/keybinds";
 import { getTabFile } from "@/utils/tabs";
 import { useXiangqiStore } from "@/xiangqi/store";
-import XiangqiAnalysisPanel from "../xiangqi/XiangqiAnalysisPanel";
+import XiangqiAnalysisPanel, { XiangqiAnalysisProvider } from "../xiangqi/XiangqiAnalysisPanel";
 import XiangqiBoardControls from "../xiangqi/XiangqiBoardControls";
 import XiangqiGameNotation from "../xiangqi/XiangqiGameNotation";
 import XiangqiInfoPanel from "../xiangqi/XiangqiInfoPanel";
@@ -89,6 +88,12 @@ function BoardAnalysis() {
     }
   }, [autoSave, dirty, saveFile, tabFile]);
 
+  useEffect(() => {
+    if (currentTabSelected === "annotate") {
+      setCurrentTabSelected("info");
+    }
+  }, [currentTabSelected, setCurrentTabSelected]);
+
   const keyMap = useAtomValue(keyMapAtom);
   useHotkeys([
     [keyMap.SAVE_FILE.keys, () => saveFile()],
@@ -101,7 +106,6 @@ function BoardAnalysis() {
     ],
     [keyMap.ANALYSIS_TAB.keys, () => setCurrentTabSelected("analysis")],
     [keyMap.DATABASE_TAB.keys, () => setCurrentTabSelected("database")],
-    [keyMap.ANNOTATE_TAB.keys, () => setCurrentTabSelected("annotate")],
     [keyMap.INFO_TAB.keys, () => setCurrentTabSelected("info")],
   ]);
 
@@ -109,93 +113,86 @@ function BoardAnalysis() {
 
   return (
     <>
-      <Portal target="#left" style={{ height: "100%" }}>
-        <Board editingMode={false} boardRef={boardRef} />
-      </Portal>
-      <Portal target="#topRight" style={{ height: "100%" }}>
-        <Paper withBorder style={{ height: "100%" }} pos="relative">
-          <Tabs
-            w="100%"
-            h="100%"
-            value={currentTabSelected}
-            onChange={(v) => setCurrentTabSelected(v || "info")}
-            keepMounted={false}
-            activateTabWithKeyboard={false}
-            style={{ display: "flex", flexDirection: "column" }}
-            styles={{
-              tabLabel: { flex: 0 },
-              tab: {
-                display: "flex",
-                justifyContent: "center",
-                gap: "0.3rem",
-              },
-            }}
-          >
-            <Tabs.List grow>
-              {isRepertoire && (
-                <Tabs.Tab value="practice" leftSection={<IconTargetArrow size="1rem" />}>
-                  {t("Board.Tabs.Practice")}
+      <XiangqiAnalysisProvider>
+        <Portal target="#left" style={{ height: "100%" }}>
+          <Board editingMode={false} boardRef={boardRef} />
+        </Portal>
+        <Portal target="#topRight" style={{ height: "100%" }}>
+          <Paper withBorder style={{ height: "100%" }} pos="relative">
+            <Tabs
+              w="100%"
+              h="100%"
+              value={currentTabSelected}
+              onChange={(v) => setCurrentTabSelected(v || "info")}
+              keepMounted={false}
+              activateTabWithKeyboard={false}
+              style={{ display: "flex", flexDirection: "column" }}
+              styles={{
+                tabLabel: { flex: 0 },
+                tab: {
+                  display: "flex",
+                  justifyContent: "center",
+                  gap: "0.3rem",
+                },
+              }}
+            >
+              <Tabs.List grow>
+                {isRepertoire && (
+                  <Tabs.Tab value="practice" leftSection={<IconTargetArrow size="1rem" />}>
+                    {t("Board.Tabs.Practice")}
+                  </Tabs.Tab>
+                )}
+                <Tabs.Tab value="analysis" leftSection={<IconZoomCheck size="1rem" />}>
+                  {t("Board.Tabs.Analysis")}
                 </Tabs.Tab>
+                <Tabs.Tab value="database" leftSection={<IconDatabase size="1rem" />}>
+                  {t("Board.Tabs.Database")}
+                </Tabs.Tab>
+                <Tabs.Tab value="info" leftSection={<IconInfoCircle size="1rem" />}>
+                  {t("Board.Tabs.Info")}
+                </Tabs.Tab>
+              </Tabs.List>
+              {isRepertoire && (
+                <Tabs.Panel value="practice" flex={1} style={{ overflowY: "hidden" }}>
+                  <XiangqiPendingPanel
+                    title={t("Board.Pending.PracticeTitle")}
+                    description={t("Board.Pending.PracticeDescription")}
+                  />
+                </Tabs.Panel>
               )}
-              <Tabs.Tab value="analysis" leftSection={<IconZoomCheck size="1rem" />}>
-                {t("Board.Tabs.Analysis")}
-              </Tabs.Tab>
-              <Tabs.Tab value="database" leftSection={<IconDatabase size="1rem" />}>
-                {t("Board.Tabs.Database")}
-              </Tabs.Tab>
-              <Tabs.Tab value="annotate" leftSection={<IconNotes size="1rem" />}>
-                {t("Board.Tabs.Annotate")}
-              </Tabs.Tab>
-              <Tabs.Tab value="info" leftSection={<IconInfoCircle size="1rem" />}>
-                {t("Board.Tabs.Info")}
-              </Tabs.Tab>
-            </Tabs.List>
-            {isRepertoire && (
-              <Tabs.Panel value="practice" flex={1} style={{ overflowY: "hidden" }}>
+              <Tabs.Panel value="info" flex={1} style={{ overflowY: "auto" }}>
+                <XiangqiInfoPanel />
+              </Tabs.Panel>
+              <Tabs.Panel value="database" flex={1} style={{ overflowY: "hidden" }}>
                 <XiangqiPendingPanel
-                  title={t("Board.Pending.PracticeTitle")}
-                  description={t("Board.Pending.PracticeDescription")}
+                  title={t("Board.Pending.DatabaseTitle")}
+                  description={t("Board.Pending.DatabaseDescription")}
                 />
               </Tabs.Panel>
-            )}
-            <Tabs.Panel value="info" flex={1} style={{ overflowY: "auto" }}>
-              <XiangqiInfoPanel />
-            </Tabs.Panel>
-            <Tabs.Panel value="database" flex={1} style={{ overflowY: "hidden" }}>
-              <XiangqiPendingPanel
-                title={t("Board.Pending.DatabaseTitle")}
-                description={t("Board.Pending.DatabaseDescription")}
-              />
-            </Tabs.Panel>
-            <Tabs.Panel value="annotate" flex={1} style={{ overflowY: "hidden" }}>
-              <XiangqiPendingPanel
-                title={t("Board.Pending.AnnotationTitle")}
-                description={t("Board.Pending.AnnotationDescription")}
-              />
-            </Tabs.Panel>
-            <Tabs.Panel value="analysis" flex={1} style={{ overflowY: "hidden" }}>
-              <XiangqiAnalysisPanel />
-            </Tabs.Panel>
-          </Tabs>
-        </Paper>
-      </Portal>
-      <Portal target="#bottomRight" style={{ height: "100%" }}>
-        <Stack h="100%" gap="xs">
-          <XiangqiGameNotation
-            topBar
-            controls={
-              <XiangqiBoardControls
-                editingMode={false}
-                toggleEditingMode={() => {}}
-                dirty={dirty}
-                saveFile={saveFile}
-                disableVariations
-              />
-            }
-          />
-          <XiangqiMoveControls />
-        </Stack>
-      </Portal>
+              <Tabs.Panel value="analysis" flex={1} style={{ overflowY: "hidden" }}>
+                <XiangqiAnalysisPanel />
+              </Tabs.Panel>
+            </Tabs>
+          </Paper>
+        </Portal>
+        <Portal target="#bottomRight" style={{ height: "100%" }}>
+          <Stack h="100%" gap="xs">
+            <XiangqiGameNotation
+              topBar
+              controls={
+                <XiangqiBoardControls
+                  editingMode={false}
+                  toggleEditingMode={() => {}}
+                  dirty={dirty}
+                  saveFile={saveFile}
+                  disableVariations
+                />
+              }
+            />
+            <XiangqiMoveControls />
+          </Stack>
+        </Portal>
+      </XiangqiAnalysisProvider>
     </>
   );
 }
