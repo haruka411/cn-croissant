@@ -75,6 +75,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const setCurrentNodeShapes = useXiangqiStore((s) => s.setShapes);
   const [selected, setSelected] = useState<Square | null>(null);
   const [engineThinking, setEngineThinking] = useState(false);
+  const engineRequestInFlight = useRef<string | null>(null);
   const lastEngineRequest = useRef<string | null>(null);
   const position = useMemo(() => parseFen(currentNode.fen), [currentNode.fen]);
   const lastMove = currentNode.move ? parseUciMove(currentNode.move) : null;
@@ -221,13 +222,14 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const engine = enginePlayer?.engine;
 
   useEffect(() => {
-    if (!engine || engineThinking || editingMode || viewOnly) return;
+    if (!engine || engineRequestInFlight.current || editingMode || viewOnly) return;
 
     let canceled = false;
     const requestedFen = currentNode.fen;
     const requestKey = `${engine.id}:${currentNode.id}:${requestedFen}`;
     if (lastEngineRequest.current === requestKey) return;
     lastEngineRequest.current = requestKey;
+    engineRequestInFlight.current = requestKey;
     setSelected(null);
     setEngineThinking(true);
 
@@ -239,6 +241,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     )
       .then((bestMove) => {
         if (canceled) return;
+        if (engineRequestInFlight.current !== requestKey) return;
         if (!bestMove) return;
         const parsed = parseUciMove(bestMove);
         if (!parsed) return;
@@ -254,13 +257,18 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
         onMove?.(bestMove, result.position.turn === "red" ? "black" : "red");
       })
       .finally(() => {
-        if (!canceled) {
+        if (engineRequestInFlight.current === requestKey) {
+          engineRequestInFlight.current = null;
           setEngineThinking(false);
         }
       });
 
     return () => {
       canceled = true;
+      if (engineRequestInFlight.current === requestKey) {
+        engineRequestInFlight.current = null;
+        setEngineThinking(false);
+      }
     };
   }, [
     currentNode.fen,
@@ -269,7 +277,6 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     editingMode,
     engine,
     enginePlayer,
-    engineThinking,
     onMove,
     xiangqiStore,
     viewOnly,
