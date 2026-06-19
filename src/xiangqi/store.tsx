@@ -421,7 +421,8 @@ function adjudicateXiangqiResult(
       reason: isInCheck(position, position.turn) ? "checkmate" : "noLegalMove",
     };
   }
-  if (position.halfmove >= 60) {
+  // 120 half-moves (60 full moves) without capture is the standard draw threshold.
+  if (position.halfmove >= 120) {
     return { result: "1/2-1/2", reason: "naturalDraw" };
   }
   return null;
@@ -507,6 +508,12 @@ function exclusiveSide(
   return red ? "red" : "black";
 }
 
+// NOTE: This is an approximate heuristic. It detects whether the given color can
+// capture any non-king enemy piece, but does not verify that the same piece is being
+// chased on every move, nor whether the threatened piece is protected (making the
+// capture a fair exchange). A full implementation of 长捉 requires tracking the
+// chased piece's identity and protection across the cycle, which is non-trivial.
+// Until then, perpetualChase verdicts should be treated as approximate.
 function isChasingNonKingPiece(position: XiangqiPosition, color: XiangqiColor): boolean {
   const probe: XiangqiPosition = { ...position, turn: color };
   for (const move of legalMoves(probe)) {

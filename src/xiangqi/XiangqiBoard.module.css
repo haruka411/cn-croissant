@@ -639,6 +639,31 @@
   opacity: 0.88;
 }
 
+.board[data-piece-style="custom-svg"] .piece,
+.pieceSurface[data-piece-style="custom-svg"] .piece {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.board[data-piece-style="custom-svg"] .piece::before,
+.board[data-piece-style="custom-svg"] .piece::after,
+.pieceSurface[data-piece-style="custom-svg"] .piece::before,
+.pieceSurface[data-piece-style="custom-svg"] .piece::after {
+  display: none;
+}
+
+.customPieceImage {
+  position: absolute;
+  inset: -4%;
+  z-index: 2;
+  width: 108%;
+  height: 108%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
 .pieceText {
   position: absolute;
   inset: 0;

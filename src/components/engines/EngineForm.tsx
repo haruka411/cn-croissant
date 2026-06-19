@@ -5,7 +5,11 @@ import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { match } from "ts-pattern";
 import { commands, type UciOptionConfig } from "@/bindings";
-import { type LocalEngine, requiredEngineSettings } from "@/utils/engines";
+import {
+  type LocalEngine,
+  normalizeXiangqiEngineDefaults,
+  requiredEngineSettings,
+} from "@/utils/engines";
 import { usePlatform } from "@/utils/files";
 import { unwrap } from "@/utils/unwrap";
 import FileInput from "../common/FileInput";
@@ -38,7 +42,12 @@ export default function EngineForm({
   return (
     <form
       onSubmit={form.onSubmit(async (values) =>
-        onSubmit({ ...values, loaded: true, settings: settings || values.settings || [] }),
+        onSubmit({
+          ...values,
+          loaded: true,
+          go: values.go ?? { t: "Infinite" },
+          settings: normalizeXiangqiEngineDefaults(settings || values.settings || []),
+        }),
       )}
     >
       <FileInput

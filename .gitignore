@@ -31,6 +31,7 @@ src-tauri/gen/
 src-tauri/.tauri/
 
 # Local engine binaries and neural network weights
+engine/database/
 engine/**/*.nnue
 engine/**/*.exe
 engine/**/*.dll

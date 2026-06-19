@@ -46,6 +46,7 @@ import {
   type Engine,
   engineSchema,
   type LocalEngine,
+  normalizeXiangqiEngineDefaults,
   requiredEngineSettings,
 } from "@/utils/engines";
 import { unwrap } from "@/utils/unwrap";
@@ -490,13 +491,18 @@ function EngineSettings({
             onClick={() =>
               setEngine({
                 ...engine,
+                go: engine.go ?? { t: "Infinite" },
                 settings: options?.options
-                  .filter((option) => requiredEngineSettings.includes(option.value.name))
-                  .filter((option) => option.type !== "button")
-                  .map((option) => ({
-                    name: option.value.name,
-                    value: option.value.default as string | number | boolean | null,
-                  })),
+                  ? normalizeXiangqiEngineDefaults(
+                      options.options
+                        .filter((option) => requiredEngineSettings.includes(option.value.name))
+                        .filter((option) => option.type !== "button")
+                        .map((option) => ({
+                          name: option.value.name,
+                          value: option.value.default as string | number | boolean | null,
+                        })),
+                    )
+                  : normalizeXiangqiEngineDefaults(null),
               })
             }
           >

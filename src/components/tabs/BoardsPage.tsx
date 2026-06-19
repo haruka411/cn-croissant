@@ -344,9 +344,11 @@ function TabSwitch({
       </TreeStateProvider>
     ))
     .with("puzzles", () => (
+      // The Wukong/chessdb-backed trainer is kept in XiangqiPuzzleTrainer for later iteration.
+      // Re-enable it here when the endgame UX and result handling are ready for users.
       <XiangqiPendingPage
         title="Xiangqi puzzles are not ready yet"
-        description="The old puzzle trainer depends on chess puzzle databases and chess move parsing, so it has been disabled until a Xiangqi puzzle format is implemented."
+        description="The Xiangqi endgame trainer is still being adapted, so this section is disabled for now."
       />
     ))
     .exhaustive();

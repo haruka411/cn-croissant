@@ -20,6 +20,7 @@ export type XiangqiDrawBrush =
     | "paleGreen"
     | "paleRed"
     | "paleBlue"
+    | "silver"
     | "variation";
 
 export type XiangqiDrawShape = {
@@ -28,6 +29,11 @@ export type XiangqiDrawShape = {
     brush?: XiangqiDrawBrush;
     modifiers?: {
         lineWidth?: number;
+        opacity?: number;
+        outlineWidth?: number;
+        outlineColor?: string;
+        outlineOpacity?: number;
+        glow?: boolean;
     };
 };
 
@@ -581,7 +587,6 @@ export function moveToText(
     if (!piece) return makeUciMove(move);
     const origin = coords(move.from);
     const dest = coords(move.to);
-    const sourceNumber = notationFileNumber(origin.file, piece.color);
     const forwardDelta = piece.color === "red" ? dest.rank - origin.rank : origin.rank - dest.rank;
     let op: "进" | "退" | "平";
     let targetNumber: number;
@@ -597,10 +602,37 @@ export function moveToText(
         targetNumber = Math.abs(forwardDelta);
     }
 
-    return `${CHINESE_NOTATION_LABELS[piece.color][piece.role]}${formatNotationNumber(
-        sourceNumber,
-        piece.color,
-    )}${op}${formatNotationNumber(targetNumber, piece.color)}${check ? "+" : ""}`;
+    const prefix = disambiguatedPrefix(position, move.from, piece.role, piece.color);
+    const label = CHINESE_NOTATION_LABELS[piece.color][piece.role];
+    const source = prefix
+        ? `${prefix}${label}`
+        : `${label}${formatNotationNumber(notationFileNumber(origin.file, piece.color), piece.color)}`;
+
+    return `${source}${op}${formatNotationNumber(targetNumber, piece.color)}${check ? "+" : ""}`;
+}
+
+function disambiguatedPrefix(
+    position: XiangqiPosition,
+    from: Square,
+    role: XiangqiRole,
+    color: XiangqiColor,
+): string | null {
+    const file = coords(from).file;
+    const sameFile = [...position.board.entries()]
+        .filter(([sq, p]) => p.color === color && p.role === role && coords(sq).file === file)
+        .map(([sq]) => sq);
+    if (sameFile.length <= 1) return null;
+    // Sort front-to-rear: red = descending rank, black = ascending rank
+    const sorted = sameFile.sort((a, b) =>
+        color === "red" ? coords(b).rank - coords(a).rank : coords(a).rank - coords(b).rank,
+    );
+    const index = sorted.indexOf(from);
+    const count = sorted.length;
+    if (count === 2) return index === 0 ? "前" : "后";
+    if (count === 3) return index === 0 ? "前" : index === 1 ? "中" : "后";
+    if (index === 0) return "前";
+    if (index === count - 1) return "后";
+    return CHINESE_NOTATION_NUMBERS[index + 1] ?? String(index + 1);
 }
 
 const CHINESE_NOTATION_LABELS: Record<XiangqiColor, Record<XiangqiRole, string>> = {

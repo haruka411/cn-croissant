@@ -24,6 +24,8 @@ import { getTabFile } from "@/utils/tabs";
 import { useXiangqiStore } from "@/xiangqi/store";
 import XiangqiAnalysisPanel, { XiangqiAnalysisProvider } from "../xiangqi/XiangqiAnalysisPanel";
 import XiangqiBoardControls from "../xiangqi/XiangqiBoardControls";
+import XiangqiCloudExplorerPanel from "../xiangqi/XiangqiCloudExplorerPanel";
+import XiangqiDatabaseExplorerPanel from "../xiangqi/XiangqiDatabaseExplorerPanel";
 import XiangqiGameNotation from "../xiangqi/XiangqiGameNotation";
 import XiangqiInfoPanel from "../xiangqi/XiangqiInfoPanel";
 import XiangqiMoveControls from "../xiangqi/XiangqiMoveControls";
@@ -164,10 +166,23 @@ function BoardAnalysis() {
                 <XiangqiInfoPanel />
               </Tabs.Panel>
               <Tabs.Panel value="database" flex={1} style={{ overflowY: "hidden" }}>
-                <XiangqiPendingPanel
-                  title={t("Board.Pending.DatabaseTitle")}
-                  description={t("Board.Pending.DatabaseDescription")}
-                />
+                <Tabs
+                  defaultValue="cloud"
+                  h="100%"
+                  keepMounted={false}
+                  style={{ display: "flex", flexDirection: "column" }}
+                >
+                  <Tabs.List grow>
+                    <Tabs.Tab value="cloud">云库</Tabs.Tab>
+                    <Tabs.Tab value="local">本地棋谱</Tabs.Tab>
+                  </Tabs.List>
+                  <Tabs.Panel value="cloud" flex={1} style={{ overflowY: "hidden" }}>
+                    <XiangqiCloudExplorerPanel />
+                  </Tabs.Panel>
+                  <Tabs.Panel value="local" flex={1} style={{ overflowY: "hidden" }}>
+                    <XiangqiDatabaseExplorerPanel />
+                  </Tabs.Panel>
+                </Tabs>
               </Tabs.Panel>
               <Tabs.Panel value="analysis" flex={1} style={{ overflowY: "hidden" }}>
                 <XiangqiAnalysisPanel />

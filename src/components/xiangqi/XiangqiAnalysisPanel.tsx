@@ -1,5 +1,11 @@
 import { AreaChart } from "@mantine/charts";
 import {
+  DragDropContext,
+  Draggable,
+  Droppable,
+  type DraggableProvidedDragHandleProps,
+} from "@hello-pangea/dnd";
+import {
   ActionIcon,
   Alert,
   Badge,
@@ -45,7 +51,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
 import type { EngineLog, GoMode } from "@/bindings";
@@ -53,13 +68,15 @@ import EngineLogsView from "@/components/common/EngineLogsView";
 import TimeInput from "@/components/common/TimeInput";
 import {
   currentAnalysisTabAtom,
+  currentTabAtom,
   enginesAtom,
   showArrowsAtom,
   showConsecutiveArrowsAtom,
   xiangqiEngineArrowsAtom,
   xiangqiEvaluationAtom,
+  xiangqiReportScoresAtom,
 } from "@/state/atoms";
-import type { EngineSettings, LocalEngine } from "@/utils/engines";
+import type { Engine, EngineSettings, LocalEngine } from "@/utils/engines";
 import EngineSelection from "../panels/analysis/EngineSelection";
 import CoresSlider from "../panels/analysis/CoresSlider";
 import HashSlider from "../panels/analysis/HashSlider";
@@ -126,9 +143,9 @@ type XiangqiAnalysisContextValue = {
   loadedEngines: LocalEngine[];
   effectiveLoadedEngines: LocalEngine[];
   orderedEngines: LocalEngine[];
+  reorderEngines: (sourceIndex: number, destinationIndex: number) => void;
   activeResults: Record<string, EngineResult>;
   analysisFen: string;
-  reportScores: Record<string, string>;
   threatMode: boolean;
   setThreatMode: React.Dispatch<React.SetStateAction<boolean>>;
   pinnedEngineIds: string[];
@@ -152,7 +169,6 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
   const fen = useXiangqiStore((s) => s.currentNode().fen);
   const playMove = useXiangqiStore((s) => s.makeMove);
   const [results, setResults] = useState<Record<string, EngineResult>>({});
-  const [reportScores, setReportScores] = useState<Record<string, string>>({});
   const [engineSettingsOverrides, setEngineSettingsOverrides] = useState<
     Record<string, XiangqiEngineSettings>
   >({});
@@ -164,7 +180,7 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
     [engines],
   );
   const loadedEngines = useMemo(
-    () => localEngines.filter((engine) => engine.loaded && engine.enabled !== false),
+    () => localEngines.filter((engine) => engine.loaded),
     [localEngines],
   );
   const effectiveLoadedEngines = useMemo(
@@ -207,7 +223,12 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
       setEngines(async (previous) =>
         (await previous).map((candidate) =>
           candidate.id === engineId && candidate.type === "local"
-            ? { ...candidate, go: nextSettings.go, settings: nextSettings.settings }
+            ? {
+                ...candidate,
+                enabled: nextSettings.enabled,
+                go: nextSettings.go,
+                settings: nextSettings.settings,
+              }
             : candidate,
         ),
       );
@@ -289,24 +310,8 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
     return () => {
       cancelled = true;
       unlisten?.();
-      for (const requestId of Object.values(requestIds)) {
-        void stopXiangqiAnalysis(requestId);
-      }
     };
   }, [activeEngines, analysisFen]);
-
-  useEffect(() => {
-    if (threatMode) return;
-    const score = activeEngines
-      .map((engine) => results[engine.id])
-      .find((result) => result?.fen === analysisFen && result.analysis?.lines[0]?.score)?.analysis
-      ?.lines[0]?.score;
-    if (!score) return;
-
-    setReportScores((previous) =>
-      previous[analysisFen] === score ? previous : { ...previous, [analysisFen]: score },
-    );
-  }, [activeEngines, analysisFen, results, threatMode]);
 
   useEffect(() => {
     if (!showArrows) {
@@ -314,22 +319,25 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
       return;
     }
 
+    const activeOrderedEngines = orderedEngines
+      .map((engine) => activeEngines.find((candidate) => candidate.id === engine.id))
+      .filter((engine): engine is LocalEngine => !!engine);
     const arrows: XiangqiDrawShape[] = [];
-    for (const [index, engine] of activeEngines.entries()) {
+    for (const [index, engine] of [...activeOrderedEngines].reverse().entries()) {
       const engineArrows = buildXiangqiEngineArrows(
         results[engine.id]?.analysis?.lines ?? [],
-        ENGINE_ARROW_BRUSHES[index % ENGINE_ARROW_BRUSHES.length],
+        ENGINE_ARROW_BRUSHES[(activeOrderedEngines.length - 1 - index) % ENGINE_ARROW_BRUSHES.length],
         showConsecutiveArrows,
       );
 
       for (const arrow of engineArrows) {
-        if (!hasSameXiangqiArrow(arrows, arrow)) arrows.push(arrow);
+        arrows.push(arrow);
       }
     }
 
     setEngineArrows(arrows);
     return () => setEngineArrows([]);
-  }, [activeEngines, results, setEngineArrows, showArrows, showConsecutiveArrows]);
+  }, [activeEngines, orderedEngines, results, setEngineArrows, showArrows, showConsecutiveArrows]);
 
   useEffect(() => {
     if (activeEngines.length === 0) {
@@ -360,9 +368,13 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
       loadedEngines,
       effectiveLoadedEngines,
       orderedEngines,
+      reorderEngines: (sourceIndex, destinationIndex) => {
+        setEngines(async (previous) =>
+          reorderXiangqiEngines(await previous, sourceIndex, destinationIndex),
+        );
+      },
       activeResults: results,
       analysisFen,
-      reportScores,
       threatMode,
       setThreatMode,
       pinnedEngineIds,
@@ -384,8 +396,8 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
       orderedEngines,
       pinnedEngineIds,
       playMove,
-      reportScores,
       results,
+      setEngines,
       threatMode,
       updateEngineSettings,
     ],
@@ -404,6 +416,24 @@ function useXiangqiAnalysisContext() {
   return context;
 }
 
+function reorderXiangqiEngines(
+  engines: Engine[],
+  sourceIndex: number,
+  destinationIndex: number,
+): Engine[] {
+  const result = [...engines];
+  const loaded = result.filter(
+    (engine): engine is LocalEngine => engine.type === "local" && !!engine.loaded,
+  );
+  const [removed] = loaded.splice(sourceIndex, 1);
+  if (!removed) return result;
+  loaded.splice(destinationIndex, 0, removed);
+
+  return result.map((engine) =>
+    engine.type === "local" && engine.loaded ? (loaded.shift() ?? engine) : engine,
+  );
+}
+
 function XiangqiAnalysisPanel() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -412,6 +442,7 @@ function XiangqiAnalysisPanel() {
     loadedEngines,
     effectiveLoadedEngines,
     orderedEngines,
+    reorderEngines,
     activeResults,
     analysisFen,
     threatMode,
@@ -458,6 +489,7 @@ function XiangqiAnalysisPanel() {
             loadedEngines={loadedEngines}
             effectiveLoadedEngines={effectiveLoadedEngines}
             orderedEngines={orderedEngines}
+            reorderEngines={reorderEngines}
             activeResults={activeResults}
             analysisFen={analysisFen}
             threatMode={threatMode}
@@ -503,6 +535,7 @@ function XiangqiEnginesPanel({
   loadedEngines,
   effectiveLoadedEngines,
   orderedEngines,
+  reorderEngines,
   activeResults,
   analysisFen,
   threatMode,
@@ -517,6 +550,7 @@ function XiangqiEnginesPanel({
   loadedEngines: LocalEngine[];
   effectiveLoadedEngines: LocalEngine[];
   orderedEngines: LocalEngine[];
+  reorderEngines: (sourceIndex: number, destinationIndex: number) => void;
   activeResults: Record<string, EngineResult>;
   analysisFen: string;
   threatMode: boolean;
@@ -587,29 +621,55 @@ function XiangqiEnginesPanel({
           </Paper>
         )}
 
-        <Stack gap="sm">
-          {orderedEngines.map((engine, index) => {
-            const effectiveEngine =
-              effectiveLoadedEngines.find((candidate) => candidate.id === engine.id) ?? engine;
-            const result = activeResults[engine.id];
-            return (
-              <EngineAnalysisCard
-                key={engine.id}
-                engine={effectiveEngine}
-                result={result}
-                fen={analysisFen}
-                threatMode={threatMode}
-                pinned={pinnedEngineIds.includes(engine.id)}
-                color={ENGINE_ARROW_COLORS[index % ENGINE_ARROW_COLORS.length]}
-                onPlay={playMove}
-                onManage={onManage}
-                settings={getSettings(engine)}
-                setSettings={(updater) => updateSettings(engine.id, updater)}
-                onTogglePinned={() => togglePinned(engine.id)}
-              />
-            );
-          })}
-        </Stack>
+        <DragDropContext
+          onDragEnd={({ destination, source }) => {
+            if (destination?.index === undefined || destination.index === source.index) return;
+            reorderEngines(source.index, destination.index);
+          }}
+        >
+          <Droppable droppableId="xiangqi-engines" direction="vertical">
+            {(provided) => (
+              <div ref={provided.innerRef} {...provided.droppableProps}>
+                <Stack gap="sm">
+                  {orderedEngines.map((engine, index) => {
+                    const effectiveEngine =
+                      effectiveLoadedEngines.find((candidate) => candidate.id === engine.id) ??
+                      engine;
+                    const result = activeResults[engine.id];
+                    return (
+                      <Draggable key={engine.id} draggableId={engine.id} index={index}>
+                        {(provided, snapshot) => (
+                          <div
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                            style={provided.draggableProps.style}
+                          >
+                            <EngineAnalysisCard
+                              engine={effectiveEngine}
+                              result={result}
+                              fen={analysisFen}
+                              threatMode={threatMode}
+                              pinned={pinnedEngineIds.includes(engine.id)}
+                              color={ENGINE_ARROW_COLORS[index % ENGINE_ARROW_COLORS.length]}
+                              dragHandleProps={provided.dragHandleProps ?? undefined}
+                              dragging={snapshot.isDragging}
+                              onPlay={playMove}
+                              onManage={onManage}
+                              settings={getSettings(engine)}
+                              setSettings={(updater) => updateSettings(engine.id, updater)}
+                              onTogglePinned={() => togglePinned(engine.id)}
+                            />
+                          </div>
+                        )}
+                      </Draggable>
+                    );
+                  })}
+                  {provided.placeholder}
+                </Stack>
+              </div>
+            )}
+          </Droppable>
+        </DragDropContext>
       </Stack>
     </ScrollArea>
   );
@@ -704,6 +764,8 @@ function EngineAnalysisCard({
   settings,
   setSettings,
   onTogglePinned,
+  dragHandleProps,
+  dragging,
 }: {
   engine: LocalEngine;
   result: EngineResult | undefined;
@@ -716,12 +778,14 @@ function EngineAnalysisCard({
   settings: XiangqiEngineSettings;
   setSettings: (updater: (previous: XiangqiEngineSettings) => XiangqiEngineSettings) => void;
   onTogglePinned: () => void;
+  dragHandleProps?: DraggableProvidedDragHandleProps;
+  dragging?: boolean;
 }) {
   const { t } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const lines = result?.analysis?.lines ?? [];
   const bestLine = lines[0];
-  const expectedLines = Math.max(1, getNumericSetting(settings.settings, "MultiPV", 1));
+  const expectedLines = Math.max(1, getNumericSetting(settings.settings, "MultiPV", 2));
   const progress = Math.max(0, Math.min(result?.progress ?? 0, 100));
 
   return (
@@ -731,9 +795,13 @@ function EngineAnalysisCard({
       style={{
         overflow: "hidden",
         borderTop: `3px solid var(--mantine-color-${color}-6)`,
+        opacity: dragging ? 0.85 : 1,
       }}
     >
       <Group px="sm" py="xs" gap="sm" wrap="nowrap">
+        <ActionIcon variant="subtle" color="gray" {...dragHandleProps}>
+          <IconSelector size="1rem" />
+        </ActionIcon>
         <ActionIcon
           color={color}
           variant={settings.enabled ? "filled" : "default"}
@@ -996,8 +1064,8 @@ function XiangqiEngineSettingsPanel({
   onStop: () => void;
 }) {
   const { t } = useTranslation();
-  const multipv = getNumericSetting(settings.settings, "MultiPV", 1);
-  const threads = getNumericSetting(settings.settings, "Threads", 1);
+  const multipv = getNumericSetting(settings.settings, "MultiPV", 2);
+  const threads = getNumericSetting(settings.settings, "Threads", 2);
   const hash = getNumericSetting(settings.settings, "Hash", 64);
 
   return (
@@ -1021,7 +1089,7 @@ function XiangqiEngineSettingsPanel({
           setValue={(value) =>
             setSettings((previous) => ({
               ...previous,
-              settings: setEngineSetting(previous.settings, "MultiPV", value || 1),
+              settings: setEngineSetting(previous.settings, "MultiPV", value || 2),
             }))
           }
           color={color}
@@ -1037,7 +1105,7 @@ function XiangqiEngineSettingsPanel({
           setValue={(value) =>
             setSettings((previous) => ({
               ...previous,
-              settings: setEngineSetting(previous.settings, "Threads", value || 1),
+              settings: setEngineSetting(previous.settings, "Threads", value || 2),
             }))
           }
           color={color}
@@ -1140,22 +1208,89 @@ function XiangqiGoModeInput({
 function XiangqiReportPanel() {
   const { t } = useTranslation();
   const theme = useMantineTheme();
-  const { reportScores } = useXiangqiAnalysisContext();
+  const { loadedEngines } = useXiangqiAnalysisContext();
+  const currentTab = useAtomValue(currentTabAtom);
   const root = useXiangqiStore((s) => s.root);
   const path = useXiangqiStore((s) => s.path);
   const goToMove = useXiangqiStore((s) => s.goToMove);
+  const reportNodes = useMemo(() => buildXiangqiReportNodes(root), [root]);
+  const [engineId, setEngineId] = useState("");
+  const [reportScores, setReportScores] = useAtom(xiangqiReportScoresAtom);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const cancelledRef = useRef(false);
 
-  const data = useMemo(
-    () => buildXiangqiEvalChartData(root, reportScores),
-    [reportScores, root],
+  const selectedEngine = loadedEngines.find((engine) => engine.id === engineId) ?? loadedEngines[0];
+  const reportKey = useMemo(
+    () => `${currentTab?.value ?? "unknown"}:${root.id}`,
+    [currentTab?.value, root.id],
   );
+  const scores = reportScores[reportKey] ?? {};
+  const setScores = useCallback(
+    (nextScores: Record<string, string>) =>
+      setReportScores((previous) => ({
+        ...previous,
+        [reportKey]: nextScores,
+      })),
+    [reportKey, setReportScores],
+  );
+
+  useEffect(() => {
+    if (!selectedEngine && engineId) {
+      setEngineId("");
+    } else if (!engineId && selectedEngine) {
+      setEngineId(selectedEngine.id);
+    }
+  }, [engineId, selectedEngine]);
+
+  const data = useMemo(() => buildXiangqiEvalChartData(reportNodes, scores), [reportNodes, scores]);
   const currentPointName = data.find((point) => samePath(point.path, path))?.name;
   const hasScores = data.some((point) => point.value !== "none");
+  const analysedCount = data.filter((point) => point.value !== "none").length;
 
   const onChartClick: CategoricalChartFunc = (event) => {
     const point = data.find((candidate) => candidate.name === event.activeLabel);
     if (point) goToMove(point.path);
   };
+
+  const generateReport = useCallback(async () => {
+    if (!selectedEngine || reportNodes.length === 0) return;
+    cancelledRef.current = false;
+    setIsGenerating(true);
+    setProgress(0);
+    setError(null);
+    setScores({});
+
+    const nextScores: Record<string, string> = {};
+    try {
+      for (const [index, entry] of reportNodes.entries()) {
+        if (cancelledRef.current) break;
+
+        const analysis = await analyzeXiangqiReportPosition(selectedEngine, entry.node.fen);
+        const score = analysis.lines[0]?.score;
+        if (score) {
+          nextScores[entry.node.fen] = score;
+          setScores({ ...nextScores });
+        }
+        setProgress(((index + 1) / reportNodes.length) * 100);
+      }
+    } catch (err) {
+      if (!cancelledRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (!cancelledRef.current) {
+        setProgress(100);
+      }
+      setIsGenerating(false);
+    }
+  }, [reportNodes, selectedEngine, setScores]);
+
+  const stopReport = useCallback(() => {
+    cancelledRef.current = true;
+    setIsGenerating(false);
+  }, []);
 
   if (data.length === 0) {
     return (
@@ -1172,12 +1307,41 @@ function XiangqiReportPanel() {
           <Group justify="space-between" wrap="nowrap">
             <Text fw={800}>{t("Board.Analysis.Report")}</Text>
             <Text size="xs" c="dimmed">
-              {data.filter((point) => point.value !== "none").length}/{data.length}
+              {analysedCount}/{data.length}
             </Text>
           </Group>
-          <Text size="xs" c="dimmed">
-            当前曲线来自本次会话中已由引擎分析过的主线局面
-          </Text>
+          <Group gap="xs" wrap="nowrap">
+            <Select
+              flex={1}
+              size="xs"
+              allowDeselect={false}
+              disabled={isGenerating || loadedEngines.length === 0}
+              value={selectedEngine?.id ?? ""}
+              onChange={(id) => setEngineId(id ?? "")}
+              data={loadedEngines.map((engine) => ({ value: engine.id, label: engine.name }))}
+              placeholder={t("Board.Analysis.EngineRequired")}
+            />
+            <Button
+              size="xs"
+              variant="light"
+              disabled={!selectedEngine || data.length === 0}
+              loading={isGenerating}
+              onClick={generateReport}
+            >
+              {t("Board.Analysis.GenerateReport")}
+            </Button>
+            {isGenerating && (
+              <Button size="xs" variant="default" onClick={stopReport}>
+                {t("Common.Cancel")}
+              </Button>
+            )}
+          </Group>
+          <Progress value={isGenerating ? progress : analysedCount > 0 ? 100 : 0} size="xs" />
+          {error && (
+            <Alert color="red" title={t("Board.Analysis.EngineError")}>
+              {error}
+            </Alert>
+          )}
         </Stack>
       </Paper>
 
@@ -1197,8 +1361,8 @@ function XiangqiReportPanel() {
             fillOpacity={0.7}
             splitColors={["red.1", "dark.8"]}
             splitOffset={0.5}
-            activeDotProps={{ r: 3, strokeWidth: 1 }}
-            dotProps={{ r: 0 }}
+            activeDotProps={{ r: 4, strokeWidth: 1 }}
+            dotProps={{ r: 2.5, strokeWidth: 1 }}
             gridAxis="none"
             referenceLines={
               currentPointName
@@ -1224,7 +1388,9 @@ function XiangqiReportPanel() {
         ) : (
           <Stack h={220} align="center" justify="center">
             <Text c="dimmed" size="sm">
-              打开引擎并浏览主线局面后，这里会显示局势变化
+              {loadedEngines.length === 0
+                ? t("Board.Analysis.NoLocalXiangqiEngine")
+                : "点击生成报告后，这里会显示局势变化"}
             </Text>
           </Stack>
         )}
@@ -1241,13 +1407,24 @@ type XiangqiEvalChartPoint = {
   path: number[];
 };
 
+type XiangqiReportNode = {
+  node: GameNode;
+  path: number[];
+};
+
+function buildXiangqiReportNodes(root: GameNode): XiangqiReportNode[] {
+  const nodes = traverseMainline(root).slice(1);
+  return nodes.map((node, index) => ({
+    node,
+    path: Array.from({ length: index + 1 }, () => 0),
+  }));
+}
+
 function buildXiangqiEvalChartData(
-  root: GameNode,
+  reportNodes: XiangqiReportNode[],
   scores: Record<string, string>,
 ): XiangqiEvalChartPoint[] {
-  const nodes = traverseMainline(root).slice(1);
-  return nodes.map((node, index) => {
-    const path = Array.from({ length: index + 1 }, () => 0);
+  return reportNodes.map(({ node, path }, index) => {
     const turn = parseFen(node.fen).turn;
     const score = scores[node.fen];
     const evaluation = score ? parseXiangqiEvaluation(score, turn) : null;
@@ -1264,6 +1441,27 @@ function buildXiangqiEvalChartData(
       path,
     };
   });
+}
+
+async function analyzeXiangqiReportPosition(
+  engine: LocalEngine,
+  fen: string,
+): Promise<EngineAnalysis> {
+  const settings = ensureXiangqiEngineSettings(engine.settings);
+  // Report generation must terminate for each move, so it uses a bounded pass
+  // even when the live analysis panel defaults to infinite analysis.
+  const normalizedGo = normalizeXiangqiGoMode(engine.go, { t: "Depth", c: 8 });
+  const goMode: XiangqiGoMode =
+    normalizedGo.t === "Infinite" ? { t: "Depth", c: 8 } : normalizedGo;
+  const result = await invoke<EngineAnalysis>("analyze_position", {
+    request: buildAnalyzeRequest(engine, fen, {
+      requestId: createAnalysisRequestId(engine.id),
+      goMode,
+      multipv: 1,
+      settings,
+    }),
+  });
+  return result;
 }
 
 function XiangqiEvalChartTooltip({
@@ -1406,10 +1604,10 @@ type XiangqiEngineSettings = {
 };
 
 const DEFAULT_XIANGQI_DEPTH = 10;
-const DEFAULT_XIANGQI_GO: XiangqiGoMode = { t: "Depth", c: DEFAULT_XIANGQI_DEPTH };
+const DEFAULT_XIANGQI_GO: XiangqiGoMode = { t: "Infinite" };
 const DEFAULT_XIANGQI_SETTINGS: EngineSettings = [
-  { name: "MultiPV", value: 1 },
-  { name: "Threads", value: 1 },
+  { name: "MultiPV", value: 2 },
+  { name: "Threads", value: 2 },
   { name: "Hash", value: 64 },
 ];
 
@@ -1546,7 +1744,7 @@ async function startAnalysis(engine: LocalEngine, fen: string, requestId: string
     request: buildAnalyzeRequest(engine, fen, {
       requestId,
       goMode,
-      multipv: getNumericSetting(engineSettings, "MultiPV", 1),
+      multipv: getNumericSetting(engineSettings, "MultiPV", 2),
       settings: engineSettings,
     }),
   });
@@ -1572,7 +1770,7 @@ function buildAnalyzeRequest(
       name: engine.name,
       path: engine.path,
       protocol: engine.protocol ?? "uci",
-      threads: getNumericSetting(options.settings, "Threads", 1),
+      threads: getNumericSetting(options.settings, "Threads", 2),
       hash: getNumericSetting(options.settings, "Hash", 64),
       moveTimeMs: goMode.t === "Time" ? goMode.c : null,
     },
@@ -1580,6 +1778,13 @@ function buildAnalyzeRequest(
     moves: [],
     depth,
     multipv: options.multipv,
+    extraOptions: options.settings
+      .filter((setting) => !["Threads", "Hash", "MultiPV"].includes(setting.name))
+      .filter((setting) => setting.value !== null && setting.value !== undefined)
+      .map((setting) => ({
+        name: setting.name,
+        value: String(setting.value),
+      })),
     goMode,
   };
 }
@@ -1659,7 +1864,6 @@ function PreviewBoard({ fen }: { fen: string }) {
         pieceStyle="classic"
         showDests={false}
         showLastMove={false}
-        showCoordinates="no"
         moveMethod="select"
         drawingsEnabled={false}
         onSelect={() => {}}

@@ -18,6 +18,7 @@ import {
   type XiangqiPosition,
 } from "./xiangqi";
 import classes from "./XiangqiBoard.module.css";
+import { customPieceKey, type CustomPieceUrls } from "./customPieceTheme";
 import {
   XIANGQI_PIECE_INNER_SCALE_MAX,
   XIANGQI_PIECE_INNER_SCALE_MIN,
@@ -47,8 +48,8 @@ export type PieceStyle =
   | "lacquer"
   | "stone"
   | "bamboo"
-  | "crystal";
-export type CoordinateMode = "no" | "edge" | "all";
+  | "crystal"
+  | "custom-svg";
 export type MoveMethod = "drag" | "select" | "both";
 
 const GRID_PAD_X = 8;
@@ -69,6 +70,7 @@ const DRAW_BRUSHES: Record<
   paleGreen: { key: "pg", color: "#15781b", opacity: 0.4, lineWidth: 15 },
   paleRed: { key: "pr", color: "#882020", opacity: 0.4, lineWidth: 15 },
   paleBlue: { key: "pb", color: "#003088", opacity: 0.4, lineWidth: 15 },
+  silver: { key: "s", color: "#f8fafc", opacity: 0.98, lineWidth: 10 },
   variation: { key: "v", color: "#9b59b6", opacity: 0.8, lineWidth: 10 },
 };
 
@@ -152,11 +154,11 @@ export function XiangqiBoard({
   pieceTextScale = 100,
   pieceInnerScale = 80,
   pieceInnerRingVisible = true,
+  customPieceUrls,
   shapes = [],
   autoShapes = [],
   showDests = true,
   showLastMove = true,
-  showCoordinates = "no",
   moveMethod = "both",
   snapDrawings = true,
   drawingsEnabled = true,
@@ -175,11 +177,11 @@ export function XiangqiBoard({
   pieceTextScale?: number;
   pieceInnerScale?: number;
   pieceInnerRingVisible?: boolean;
+  customPieceUrls?: CustomPieceUrls;
   shapes?: XiangqiDrawShape[];
   autoShapes?: XiangqiDrawShape[];
   showDests?: boolean;
   showLastMove?: boolean;
-  showCoordinates?: CoordinateMode;
   moveMethod?: MoveMethod;
   snapDrawings?: boolean;
   drawingsEnabled?: boolean;
@@ -414,41 +416,53 @@ export function XiangqiBoard({
             );
           })}
 
-        {Array.from(position.board.entries()).map(([sq, piece]) => (
-          <button
-            key={sq}
-            type="button"
-            className={clsx(
-              classes.piece,
-              piece.color === "red" ? classes.pieceRed : classes.pieceBlack,
-              (selected === sq || dragging === sq) && classes.selected,
-            )}
-            style={pointStyle(sq, orientation)}
-            onPointerDown={(event) => startPieceDrag(sq, event)}
-            onPointerUp={finishPieceDrag}
-            onPointerCancel={() => setDragging(null)}
-            onClick={() => {
-              if (suppressClick.current) {
-                suppressClick.current = false;
-                return;
-              }
-              handlePoint(sq);
-            }}
-            onContextMenu={(event) => {
-              if (onPutPiece) {
-                event.preventDefault();
-                onPutPiece(sq, null);
-              }
-            }}
-            aria-label={`${piece.color} ${piece.role} on ${sq}`}
-          >
-            <span className={classes.pieceText}>{PIECE_LABELS[piece.color][piece.role]}</span>
-          </button>
-        ))}
+        {Array.from(position.board.entries()).map(([sq, piece]) => {
+          const customPieceSrc =
+            pieceStyle === "custom-svg"
+              ? customPieceUrls?.[customPieceKey(piece.color, piece.role)]
+              : undefined;
 
-        {showCoordinates !== "no" && (
-          <Coordinates mode={showCoordinates} orientation={orientation} />
-        )}
+          return (
+            <button
+              key={sq}
+              type="button"
+              className={clsx(
+                classes.piece,
+                piece.color === "red" ? classes.pieceRed : classes.pieceBlack,
+                (selected === sq || dragging === sq) && classes.selected,
+              )}
+              style={pointStyle(sq, orientation)}
+              onPointerDown={(event) => startPieceDrag(sq, event)}
+              onPointerUp={finishPieceDrag}
+              onPointerCancel={() => setDragging(null)}
+              onClick={() => {
+                if (suppressClick.current) {
+                  suppressClick.current = false;
+                  return;
+                }
+                handlePoint(sq);
+              }}
+              onContextMenu={(event) => {
+                if (onPutPiece) {
+                  event.preventDefault();
+                  onPutPiece(sq, null);
+                }
+              }}
+              aria-label={`${piece.color} ${piece.role} on ${sq}`}
+            >
+              {customPieceSrc ? (
+                <img
+                  src={customPieceSrc}
+                  className={classes.customPieceImage}
+                  draggable={false}
+                  alt=""
+                />
+              ) : pieceStyle === "custom-svg" ? null : (
+                <span className={classes.pieceText}>{PIECE_LABELS[piece.color][piece.role]}</span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -564,7 +578,15 @@ function DrawShapes({
             refX={2.05}
             refY={2}
           >
-            <path d="M0,0 V4 L3,2 Z" fill={brush.color} />
+            <path
+              d="M0,0 V4 L3,2 Z"
+              fill={brush.color}
+              stroke={brush.key === "s" ? "#1f2937" : undefined}
+              strokeWidth={brush.key === "s" ? 0.55 : undefined}
+              strokeOpacity={brush.key === "s" ? 0.58 : undefined}
+              strokeLinejoin="round"
+              paintOrder="stroke"
+            />
           </marker>
         ))}
       </defs>
@@ -602,18 +624,48 @@ function DrawArrow({
     return <DrawCircle shape={shape} orientation={orientation} />;
   }
 
+  const outlineWidth = shape.modifiers?.outlineWidth ?? 0;
+  const outlineColor = shape.modifiers?.outlineColor ?? "#111827";
+  const outlineOpacity = shape.modifiers?.outlineOpacity ?? 0.45;
+
   return (
-    <line
-      x1={geometry.start.x}
-      y1={geometry.start.y}
-      x2={geometry.end.x}
-      y2={geometry.end.y}
-      stroke={brush.color}
-      strokeWidth={strokeWidth}
-      strokeLinecap="round"
-      markerEnd={`url(#${arrowMarkerId(brush.key)})`}
-      opacity={brush.opacity}
-    />
+    <>
+      {shape.modifiers?.glow && (
+        <line
+          x1={geometry.start.x}
+          y1={geometry.start.y}
+          x2={geometry.end.x}
+          y2={geometry.end.y}
+          stroke={brush.color}
+          strokeWidth={strokeWidth + 14}
+          strokeLinecap="round"
+          opacity={0.22}
+        />
+      )}
+      {outlineWidth > 0 && (
+        <line
+          x1={geometry.start.x}
+          y1={geometry.start.y}
+          x2={geometry.end.x}
+          y2={geometry.end.y}
+          stroke={outlineColor}
+          strokeWidth={strokeWidth + outlineWidth}
+          strokeLinecap="round"
+          opacity={outlineOpacity}
+        />
+      )}
+      <line
+        x1={geometry.start.x}
+        y1={geometry.start.y}
+        x2={geometry.end.x}
+        y2={geometry.end.y}
+        stroke={brush.color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        markerEnd={`url(#${arrowMarkerId(brush.key)})`}
+        opacity={brush.opacity}
+      />
+    </>
   );
 }
 
@@ -641,6 +693,7 @@ function brushForShape(shape: XiangqiDrawShape) {
   return {
     ...base,
     lineWidth: shape.modifiers?.lineWidth ?? base.lineWidth,
+    opacity: shape.modifiers?.opacity ?? base.opacity,
   };
 }
 
@@ -684,75 +737,6 @@ function riverStyle() {
     width: `${GRID_WIDTH}%`,
     height: `${GRID_HEIGHT / 9}%`,
   };
-}
-
-function Coordinates({
-  mode,
-  orientation,
-}: {
-  mode: Exclude<CoordinateMode, "no">;
-  orientation: Orientation;
-}) {
-  const showBothEdges = mode === "all";
-
-  return (
-    <>
-      {Array.from({ length: 9 }, (_, file) => (
-        <span
-          key={`coord-file-bottom-${file}`}
-          className={classes.coordinate}
-          style={{
-            left: `${pointLeft(file, orientation)}%`,
-            bottom: "0.35rem",
-            transform: "translateX(-50%)",
-          }}
-        >
-          {String.fromCharCode("a".charCodeAt(0) + file)}
-        </span>
-      ))}
-      {showBothEdges &&
-        Array.from({ length: 9 }, (_, file) => (
-          <span
-            key={`coord-file-top-${file}`}
-            className={classes.coordinate}
-            style={{
-              left: `${pointLeft(file, orientation)}%`,
-              top: "0.35rem",
-              transform: "translateX(-50%)",
-            }}
-          >
-            {String.fromCharCode("a".charCodeAt(0) + file)}
-          </span>
-        ))}
-      {Array.from({ length: 10 }, (_, rank) => (
-        <span
-          key={`coord-rank-left-${rank}`}
-          className={classes.coordinate}
-          style={{
-            left: "0.35rem",
-            top: `${pointTop(rank, orientation)}%`,
-            transform: "translateY(-50%)",
-          }}
-        >
-          {rank}
-        </span>
-      ))}
-      {showBothEdges &&
-        Array.from({ length: 10 }, (_, rank) => (
-          <span
-            key={`coord-rank-right-${rank}`}
-            className={classes.coordinate}
-            style={{
-              right: "0.35rem",
-              top: `${pointTop(rank, orientation)}%`,
-              transform: "translateY(-50%)",
-            }}
-          >
-            {rank}
-          </span>
-        ))}
-    </>
-  );
 }
 
 function Marker({

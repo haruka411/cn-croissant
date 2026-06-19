@@ -4,6 +4,7 @@ export function formatNumber(value?: number): string {
 }
 
 export function formatBytes(bytes: bigint | number, decimals = 2) {
+    if (Number(bytes) <= 0) return "0 Bytes";
     const k = 1024;
     const dm = decimals < 0 ? 0 : decimals;
     const sizes = ["Bytes", "KB", "MB", "GB", "TB"];

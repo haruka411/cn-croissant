@@ -26,7 +26,6 @@ import {
   fontSizeAtom,
   primaryColorAtom,
   referenceDbAtom,
-  spellCheckAtom,
   storedDatabasesDirAtom,
   storedDocumentDirAtom,
   storedEnginesDirAtom,
@@ -165,7 +164,6 @@ export default function App() {
   const primaryColor = useAtomValue(primaryColorAtom);
   const appFontFamily = useAtomValue(appFontFamilyAtom);
   const fontSize = useAtomValue(fontSizeAtom);
-  const spellCheck = useAtomValue(spellCheckAtom);
   const setDatabaseConversionState = useSetAtom(databaseConversionStateAtom);
 
   useAppStartup();
@@ -223,13 +221,13 @@ export default function App() {
           color: primaryColor,
         },
       }),
-      TextInput: TextInput.extend({ defaultProps: { spellCheck } }),
-      Autocomplete: Autocomplete.extend({ defaultProps: { spellCheck } }),
-      Textarea: Textarea.extend({ defaultProps: { spellCheck } }),
+      TextInput: TextInput.extend({ defaultProps: { spellCheck: false } }),
+      Autocomplete: Autocomplete.extend({ defaultProps: { spellCheck: false } }),
+      Textarea: Textarea.extend({ defaultProps: { spellCheck: false } }),
       Input: Input.extend({
         defaultProps: {
           // @ts-expect-error - Solve mantine input type check
-          spellCheck,
+          spellCheck: false,
         },
       }),
     },

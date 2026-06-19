@@ -9,8 +9,11 @@ cn-croissant 是一个中国象棋的GUI工具，目标是提供棋局管理、�
 
 ## 项目状态
 
-项目仍处于开发早期，功能还很不完善。
-当前重点是让 En Croissant 风格的桌面棋类工具适配中国象棋规则、记谱和引擎生态。
+核心闭环已可用：象棋规则核心、SVG 交叉点棋盘、中文/WXF/坐标记谱、引擎实时分析（Pikafish 内置）、人机/人人/机机对弈、结果裁决都是为象棋重写的真实实现，并有测试覆盖。
+
+外围数据能力仍在建设中：本地棋谱库已能扫描目录、建立 IndexedDB 索引并浏览 PGN，但 CBL 象棋桥库仅识别到库级、OBK 开局库的真实查询、XQF 解析、残局训练正式版尚未完成。代码层面还保留较多上游国际象棋遗留，正在逐步隔离。
+
+详细的模块完成度、已知 bug 和后续计划见 [docs/project-status-vs-en-croissant.md](./docs/project-status-vs-en-croissant.md) 与 [docs/development-roadmap.md](./docs/development-roadmap.md)。
 
 ## 与 En Croissant 的关系
 

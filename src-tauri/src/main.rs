@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
+    net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
@@ -81,6 +82,12 @@ struct LocalEngineConfig {
     move_time_ms: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct EngineOption {
+    name: String,
+    value: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BuiltinEngine {
@@ -99,6 +106,8 @@ struct AnalyzeRequest {
     moves: Vec<String>,
     depth: u32,
     multipv: u32,
+    #[serde(default, rename = "extraOptions")]
+    extra_options: Vec<EngineOption>,
     #[serde(rename = "goMode")]
     go_mode: Option<GoMode>,
 }
@@ -195,6 +204,21 @@ struct StorePayload {
     contents: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChessdbQueryRequest {
+    action: String,
+    board: String,
+    #[serde(default)]
+    endgame: bool,
+    #[serde(default = "default_chessdb_metric")]
+    egtb_metric: String,
+}
+
+fn default_chessdb_metric() -> String {
+    "dtm".to_string()
+}
+
 #[tauri::command]
 async fn close_splashscreen(window: Window) -> Result<(), String> {
     window
@@ -249,6 +273,12 @@ fn analyze_position(request: AnalyzeRequest) -> Result<EngineAnalysis, String> {
 
     let mut logs = Vec::new();
     init_engine(&mut engine, &request.engine, request.multipv, &mut logs)?;
+    configure_extra_engine_options(
+        &mut engine.stdin,
+        &request.engine.protocol,
+        &request.extra_options,
+        &mut logs,
+    )?;
     send_engine_position(
         &mut engine.stdin,
         &request.engine.protocol,
@@ -509,6 +539,34 @@ fn get_engine_config(
     Ok(config)
 }
 
+#[tauri::command]
+fn query_chessdb(request: ChessdbQueryRequest) -> Result<String, String> {
+    let action = request.action.trim().to_lowercase();
+    if !matches!(
+        action.as_str(),
+        "querybest" | "query" | "querysearch" | "queryall" | "queryscore" | "querypv"
+    ) {
+        return Err("unsupported chessdb action".to_string());
+    }
+
+    let metric = request.egtb_metric.trim().to_lowercase();
+    if !matches!(metric.as_str(), "dtm" | "dtc") {
+        return Err("unsupported chessdb tablebase metric".to_string());
+    }
+
+    let mut path = format!(
+        "/chessdb.php?action={}&learn=0&egtbmetric={}&board={}",
+        percent_encode_query(&action),
+        percent_encode_query(&metric),
+        percent_encode_query(request.board.trim())
+    );
+    if request.endgame {
+        path.push_str("&endgame=1");
+    }
+
+    http_get_chessdb(&path)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -532,7 +590,8 @@ fn main() {
             preload_reference_db,
             kill_engines,
             abort_game,
-            get_engine_config
+            get_engine_config,
+            query_chessdb
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -557,6 +616,102 @@ fn store_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
     Ok(dir.join(Path::new(name).with_extension("json")))
 }
 
+fn http_get_chessdb(path: &str) -> Result<String, String> {
+    let address = "www.chessdb.cn:80"
+        .to_socket_addrs()
+        .map_err(|error| format!("failed to resolve chessdb.cn: {}", error))?
+        .next()
+        .ok_or("failed to resolve chessdb.cn".to_string())?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
+        .map_err(|error| format!("failed to connect to chessdb.cn: {}", error))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(10)))
+        .map_err(|error| error.to_string())?;
+
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: www.chessdb.cn\r\nUser-Agent: cn-croissant/0.1\r\nConnection: close\r\n\r\n",
+        path
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| error.to_string())?;
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| error.to_string())?;
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or("invalid chessdb response".to_string())?;
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
+        return Err(headers.lines().next().unwrap_or("chessdb request failed").to_string());
+    }
+    let mut body = response[header_end + 4..].to_vec();
+    if headers
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
+        body = decode_chunked_body(&body)?;
+    }
+    let body = String::from_utf8_lossy(&body);
+    Ok(body.trim_matches('\0').trim().to_string())
+}
+
+fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>, String> {
+    let mut cursor = 0;
+    let mut decoded = Vec::new();
+
+    loop {
+        let size_end = find_crlf(body, cursor).ok_or("invalid chunked chessdb response")?;
+        let size_text = String::from_utf8_lossy(&body[cursor..size_end]);
+        let size_hex = size_text.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_hex, 16)
+            .map_err(|_| "invalid chunk size in chessdb response".to_string())?;
+        cursor = size_end + 2;
+        if size == 0 {
+            break;
+        }
+        let chunk_end = cursor + size;
+        if chunk_end > body.len() {
+            return Err("truncated chunked chessdb response".to_string());
+        }
+        decoded.extend_from_slice(&body[cursor..chunk_end]);
+        cursor = chunk_end;
+        if body.get(cursor..cursor + 2) == Some(b"\r\n") {
+            cursor += 2;
+        }
+    }
+
+    Ok(decoded)
+}
+
+fn find_crlf(bytes: &[u8], start: usize) -> Option<usize> {
+    bytes
+        .get(start..)?
+        .windows(2)
+        .position(|window| window == b"\r\n")
+        .map(|index| start + index)
+}
+
+fn percent_encode_query(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push_str("%20"),
+            _ => out.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    out
+}
+
 struct EngineRuntime {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -572,6 +727,7 @@ struct XiangqiAnalysisProcess {
     depth: u32,
     go_mode: GoMode,
     multipv: u32,
+    extra_options: Vec<EngineOption>,
     request_id: String,
     lines: BTreeMap<u32, EngineLine>,
     bestmove: String,
@@ -593,6 +749,7 @@ impl XiangqiAnalysisProcess {
             && self.engine.threads == request.engine.threads
             && self.engine.hash == request.engine.hash
             && self.engine.move_time_ms == request.engine.move_time_ms
+            && self.extra_options == request.extra_options
     }
 
     fn configure_and_go(&mut self, request: AnalyzeRequest) -> Result<(), String> {
@@ -603,6 +760,7 @@ impl XiangqiAnalysisProcess {
         self.depth = request.depth;
         self.go_mode = resolve_go_mode(&request);
         self.multipv = request.multipv;
+        self.extra_options = request.extra_options.clone();
         self.lines.clear();
         self.bestmove.clear();
         self.logs.clear();
@@ -615,6 +773,12 @@ impl XiangqiAnalysisProcess {
             request.engine.threads,
             request.engine.hash,
             request.multipv,
+            &mut self.logs,
+        )?;
+        configure_extra_engine_options(
+            &mut self.stdin,
+            &request.engine.protocol,
+            &request.extra_options,
             &mut self.logs,
         )?;
         send_engine_position(
@@ -688,6 +852,7 @@ fn spawn_xiangqi_analysis_process(
         depth: request.depth,
         go_mode: resolve_go_mode(&request),
         multipv: request.multipv,
+        extra_options: Vec::new(),
         request_id: String::new(),
         lines: BTreeMap::new(),
         bestmove: String::new(),
@@ -876,6 +1041,27 @@ fn configure_engine_options(
             )
             .ok();
         }
+    }
+    Ok(())
+}
+
+fn configure_extra_engine_options(
+    stdin: &mut ChildStdin,
+    protocol: &EngineProtocol,
+    options: &[EngineOption],
+    logs: &mut Vec<String>,
+) -> Result<(), String> {
+    for option in options {
+        if option.name.trim().is_empty() {
+            continue;
+        }
+        let command = match protocol {
+            EngineProtocol::Uci => {
+                format!("setoption name {} value {}", option.name, option.value)
+            }
+            EngineProtocol::Ucci => format!("setoption {} {}", option.name, option.value),
+        };
+        send_engine_line(stdin, &command, logs).ok();
     }
     Ok(())
 }

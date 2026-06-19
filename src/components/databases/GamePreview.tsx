@@ -22,7 +22,7 @@ function GamePreviewWrapper({
   hideControls?: boolean;
   showOpening?: boolean;
 }) {
-  const { data: parsedGame, isLoading } = useSWRImmutable(
+  const { data: parsedGame } = useSWRImmutable(
     [pgn, headers?.fen],
     async ([pgn, fen]) => {
       return await parsePGN(pgn, fen);

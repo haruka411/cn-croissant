@@ -330,6 +330,18 @@ function RootLayout() {
   }, [menu, isNative]);
 
   useEffect(() => {
+    const preventBrowserMenu = (event: MouseEvent) => {
+      if (event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      event.preventDefault();
+    };
+
+    window.addEventListener("contextmenu", preventBrowserMenu);
+    return () => window.removeEventListener("contextmenu", preventBrowserMenu);
+  }, []);
+
+  useEffect(() => {
     const unlisten = getCurrentWindow().listen(TauriEvent.DRAG_DROP, (event) => {
       const payload = event.payload as { paths: string[] };
       if (payload?.paths) {

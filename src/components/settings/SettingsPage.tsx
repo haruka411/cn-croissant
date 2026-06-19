@@ -36,19 +36,15 @@ import {
   flipBoardAfterMoveAtom,
   materialDisplayAtom,
   moveHighlightAtom,
-  moveInputAtom,
   moveMethodAtom,
-  moveNotationTypeAtom,
   nativeBarAtom,
   practiceAutoDifficultyAtom,
   previewBoardOnHoverAtom,
   showArrowsAtom,
   showConsecutiveArrowsAtom,
-  showCoordinatesAtom,
   showDestsAtom,
   showVariationArrowsAtom,
   snapArrowsAtom,
-  spellCheckAtom,
   storedDatabasesDirAtom,
   storedDocumentDirAtom,
   storedEnginesDirAtom,
@@ -138,8 +134,6 @@ export default function Page() {
   enginesDirectory = enginesDirectory || defaultEnginesDir;
 
   const [moveMethod, setMoveMethod] = useAtom(moveMethodAtom);
-  const [moveNotationType, setMoveNotationType] = useAtom(moveNotationTypeAtom);
-  const [showCoordinates, setShowCoordinates] = useAtom(showCoordinatesAtom);
   const [materialDisplay, setMaterialDisplay] = useAtom(materialDisplayAtom);
   const [practiceAutoDifficulty, setPracticeAutoDifficulty] = useAtom(practiceAutoDifficultyAtom);
 
@@ -176,24 +170,6 @@ export default function Page() {
         description: t("Settings.VariationArrows.Desc"),
         keywords: ["arrows", "variations", "alternative"],
         render: () => <SettingsSwitch atom={showVariationArrowsAtom} />,
-      },
-      {
-        id: "move-notation",
-        category: "board",
-        title: t("Settings.MoveNotation"),
-        description: t("Settings.MoveNotation.Desc"),
-        keywords: ["notation", "pieces"],
-        render: () => (
-          <Select
-            data={[
-              { label: t("Settings.MoveNotation.Letters"), value: "letters" },
-              { label: t("Settings.MoveNotation.Symbols"), value: "symbols" },
-            ]}
-            allowDeselect={false}
-            value={moveNotationType}
-            onChange={(val) => setMoveNotationType(val as "letters" | "symbols")}
-          />
-        ),
       },
       {
         id: "move-method",
@@ -237,25 +213,6 @@ export default function Page() {
         description: t("Settings.EraseDrawablesOnClick.Desc"),
         keywords: ["erase", "drawables", "click", "arrows"],
         render: () => <SettingsSwitch atom={eraseDrawablesOnClickAtom} />,
-      },
-      {
-        id: "coordinates",
-        category: "board",
-        title: t("Settings.Coordinates"),
-        description: t("Settings.Coordinates.Desc"),
-        keywords: ["coordinates", "files", "ranks"],
-        render: () => (
-          <Select
-            data={[
-              { label: t("Settings.Coordinates.None"), value: "no" },
-              { label: t("Settings.Coordinates.Edge"), value: "edge" },
-              { label: t("Settings.Coordinates.All"), value: "all" },
-            ]}
-            allowDeselect={false}
-            value={showCoordinates}
-            onChange={(val) => setShowCoordinates(val as "no" | "edge" | "all")}
-          />
-        ),
       },
       {
         id: "auto-save",
@@ -306,22 +263,6 @@ export default function Page() {
             onChange={(val) => setMaterialDisplay(val as "diff" | "all")}
           />
         ),
-      },
-      {
-        id: "text-input",
-        category: "inputs",
-        title: t("Settings.Inputs.TextInput"),
-        description: t("Settings.Inputs.TextInput.Desc"),
-        keywords: ["text", "input", "type"],
-        render: () => <SettingsSwitch atom={moveInputAtom} />,
-      },
-      {
-        id: "spell-check",
-        category: "inputs",
-        title: t("Settings.Inputs.SpellCheck"),
-        description: t("Settings.Inputs.SpellCheck.Desc"),
-        keywords: ["spell", "check", "grammar"],
-        render: () => <SettingsSwitch atom={spellCheckAtom} />,
       },
       {
         id: "theme",
@@ -392,8 +333,10 @@ export default function Page() {
         id: "piece-set",
         category: "appearance",
         title: isChinese ? "棋子样式" : "Xiangqi Pieces",
-        description: isChinese ? "选择中国象棋棋子的显示样式" : "Choose the Xiangqi piece style",
-        keywords: ["piece", "xiangqi", "style"],
+        description: isChinese
+          ? "选择中国象棋棋子的显示样式；选择“自定义 SVG”后可打开固定文件夹放置 SVG"
+          : "Choose the Xiangqi piece style; choose Custom SVG to open the fixed SVG folder",
+        keywords: ["piece", "xiangqi", "style", "svg", "custom"],
         render: () => <PiecesSelect />,
       },
       {
@@ -517,21 +460,17 @@ export default function Page() {
       t,
       i18n,
       isChinese,
-      moveNotationType,
       moveMethod,
       isNative,
-      showCoordinates,
       materialDisplay,
       filesDirectory,
       databasesDirectory,
       enginesDirectory,
-      setMoveNotationType,
       setMoveMethod,
       setIsNative,
       setFilesDirectory,
       setDatabasesDirectory,
       setEnginesDirectory,
-      setShowCoordinates,
       setMaterialDisplay,
       practiceAutoDifficulty,
       setPracticeAutoDifficulty,

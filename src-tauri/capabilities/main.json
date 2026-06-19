@@ -27,6 +27,7 @@
         "process:default",
         "log:default",
         "fs:default",
+        "fs:allow-resource-read-recursive",
         "fs:write-all",
         {
             "identifier": "fs:scope-appdata-recursive",

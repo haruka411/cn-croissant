@@ -172,8 +172,6 @@ export const appFontFamilyAtom = atomWithStorage<AppFontFamily>("app-font-family
 
 export const moveNotationTypeAtom = atomWithStorage<"letters" | "symbols">("letters", "symbols");
 export const moveMethodAtom = atomWithStorage<"drag" | "select" | "both">("move-method", "both");
-export const spellCheckAtom = atomWithStorage<boolean>("spell-check", false);
-export const moveInputAtom = atomWithStorage<boolean>("move-input", false);
 export const showDestsAtom = atomWithStorage<boolean>("show-dests", true);
 export const moveHighlightAtom = atomWithStorage<boolean>("move-highlight", true);
 export const snapArrowsAtom = atomWithStorage<boolean>("snap-dests", true);
@@ -189,11 +187,17 @@ export const clearXiangqiDrawingsAtom = atom(null, (get, set) =>
     set(xiangqiClearDrawingsSignalAtom, get(xiangqiClearDrawingsSignalAtom) + 1),
 );
 export const xiangqiEngineArrowsAtom = atom<XiangqiDrawShape[]>([]);
+export const xiangqiCloudArrowsAtom = atom<XiangqiDrawShape[]>([]);
 export const xiangqiEvaluationAtom = atom<{
     fen: string;
     pending: boolean;
     score: string | null;
 } | null>(null);
+export const xiangqiReportScoresAtom = atomWithStorage<Record<string, Record<string, string>>>(
+    "xiangqi-report-scores",
+    {},
+    createJSONStorage(() => sessionStorage),
+);
 export const autoPromoteAtom = atomWithStorage<boolean>("auto-promote", true);
 export const autoSaveAtom = atomWithStorage<boolean>("auto-save", true);
 export const previewBoardOnHoverAtom = atomWithStorage<boolean>("preview-board-on-hover", true);
@@ -231,7 +235,8 @@ export type XiangqiPieceStyle =
     | "lacquer"
     | "stone"
     | "bamboo"
-    | "crystal";
+    | "crystal"
+    | "custom-svg";
 export type XiangqiBoardTheme =
     | "classic"
     | "jade"

@@ -39,11 +39,11 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 import { useTranslation } from "react-i18next";
+import { notifications } from "@mantine/notifications";
 import { commands } from "@/bindings";
 import { getStats } from "@/components/files/opening";
 import Chessboard from "../icons/Chessboard";
 import { FileIcon } from "@/components/files/FileIcon";
-import { notifications } from "@mantine/notifications";
 
 dayjs.extend(relativeTime);
 

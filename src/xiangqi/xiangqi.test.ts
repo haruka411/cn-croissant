@@ -64,9 +64,9 @@ describe("xiangqi rules", () => {
         expect(result.position.halfmove).toBe(1);
     });
 
-    it("adjudicates a draw after 60 consecutive non-capturing halfmoves", () => {
+    it("adjudicates a draw after 120 consecutive non-capturing halfmoves", () => {
         const store = createXiangqiStore();
-        store.getState().setFen("4k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 59 1");
+        store.getState().setFen("4k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 119 1");
         const move = parseUciMove("a0a1");
         expect(move).not.toBeNull();
 
@@ -75,6 +75,53 @@ describe("xiangqi rules", () => {
         expect(store.getState().headers.result).toBe("1/2-1/2");
         expect(store.getState().headers.resultReason).toBe("naturalDraw");
         expect(store.getState().exportNotation()).toContain('[Termination "naturalDraw"]');
+    });
+
+    it("adjudicates checkmate when the king is in check with no legal moves", () => {
+        // Red king cornered, black rook gives check, red has no escape.
+        // k=black king e9, r=black rook a0 giving check to red king on e0
+        const store = createXiangqiStore();
+        store.getState().setFen("4k4/9/9/9/9/9/9/9/9/r3K4 b - - 0 1");
+        const move = parseUciMove("a0e0");
+        expect(move).not.toBeNull();
+        store.getState().makeMove(move!);
+
+        expect(store.getState().headers.result).toBe("0-1");
+        expect(store.getState().headers.resultReason).toBe("checkmate");
+    });
+
+    it("adjudicates 困毙 (noLegalMove) when the side to move has no legal moves but is not in check", () => {
+        // Black king e9 is not in check, but every escape square is covered:
+        // rook on rank 8 covers e8, rook on d-file covers d9, rook on f-file covers f9.
+        // Red rook a2 moves to a8 to complete the net; black then has zero legal moves.
+        const store = createXiangqiStore();
+        store.getState().setFen("4k4/9/9/9/9/9/9/R8/3R1R3/K8 w - - 0 1");
+        const move = parseUciMove("a2a8");
+        expect(move).not.toBeNull();
+        store.getState().makeMove(move!);
+
+        expect(store.getState().headers.result).toBe("1-0");
+        expect(store.getState().headers.resultReason).toBe("noLegalMove");
+    });
+
+    it("adjudicates perpetual check as a loss for the checking side", () => {
+        // Red rook oscillates d1<->e1 giving check every move; black king flees e9<->d9.
+        // Red king on f0 keeps off the kings' file so the flying-general rule never interferes.
+        const store = createXiangqiStore();
+        store.getState().setFen("4k4/9/9/9/9/9/9/9/3R5/5K3 w - - 0 1");
+        for (const text of [
+            "d1e1", "e9d9",
+            "e1d1", "d9e9",
+            "d1e1", "e9d9",
+            "e1d1", "d9e9",
+        ]) {
+            const move = parseUciMove(text);
+            expect(move).not.toBeNull();
+            store.getState().makeMove(move!);
+        }
+
+        expect(store.getState().headers.result).toBe("0-1");
+        expect(store.getState().headers.resultReason).toBe("perpetualCheck");
     });
 
     it("adjudicates unresolved threefold repetition as a draw", () => {

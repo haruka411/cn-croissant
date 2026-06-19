@@ -6,6 +6,30 @@ import { type BestMoves, commands, type EngineOptions, type GoMode } from "@/bin
 import { unwrap } from "./unwrap";
 
 export const requiredEngineSettings = ["MultiPV", "Threads", "Hash"];
+export const defaultXiangqiEngineSettings: EngineSettings = [
+    { name: "MultiPV", value: 2 },
+    { name: "Threads", value: 2 },
+    { name: "Hash", value: 64 },
+];
+
+export function normalizeXiangqiEngineDefaults(settings: EngineSettings | null | undefined): EngineSettings {
+    const next = [...(settings ?? [])];
+    for (const defaultSetting of defaultXiangqiEngineSettings) {
+        const index = next.findIndex((setting) => setting.name === defaultSetting.name);
+        if (index >= 0) {
+            const value = next[index].value;
+            if (
+                (defaultSetting.name === "MultiPV" || defaultSetting.name === "Threads") &&
+                (value === null || Number(value) <= 1)
+            ) {
+                next[index] = { ...next[index], value: defaultSetting.value };
+            }
+        } else {
+            next.push({ ...defaultSetting });
+        }
+    }
+    return next;
+}
 
 const engineProtocolSchema = z.enum(["uci", "ucci"]).default("uci");
 export type EngineProtocol = z.output<typeof engineProtocolSchema>;

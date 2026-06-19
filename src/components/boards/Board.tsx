@@ -1,4 +1,5 @@
 import { Box, Center, Group, Text } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { invoke } from "@tauri-apps/api/core";
 import type { Piece } from "chessops";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,7 +16,6 @@ import {
   moveHighlightAtom,
   moveMethodAtom,
   pieceSetAtom,
-  showCoordinatesAtom,
   showDestsAtom,
   showVariationArrowsAtom,
   snapArrowsAtom,
@@ -23,6 +23,7 @@ import {
   xiangqiPieceInnerRingVisibleAtom,
   xiangqiPieceTextScaleAtom,
   xiangqiClearDrawingsSignalAtom,
+  xiangqiCloudArrowsAtom,
   xiangqiEngineArrowsAtom,
   xiangqiEvaluationAtom,
 } from "@/state/atoms";
@@ -41,6 +42,7 @@ import {
 } from "@/xiangqi/xiangqi";
 import { parseXiangqiEvaluation, scoreToEvalFill } from "@/xiangqi/evaluation";
 import { useXiangqiStore, useXiangqiStoreApi } from "@/xiangqi/store";
+import { useCustomXiangqiPieces } from "@/xiangqi/customPieceTheme";
 import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
 import { playSound } from "@/utils/sound";
 
@@ -80,9 +82,10 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const pieceTextScale = useAtomValue(xiangqiPieceTextScaleAtom);
   const pieceInnerScale = useAtomValue(xiangqiPieceInnerScaleAtom);
   const pieceInnerRingVisible = useAtomValue(xiangqiPieceInnerRingVisibleAtom);
+  const customPieceTheme = useCustomXiangqiPieces(pieceStyle === "custom-svg");
+  const customPieceWarningShownRef = useRef(false);
   const showDests = useAtomValue(showDestsAtom);
   const showLastMove = useAtomValue(moveHighlightAtom);
-  const showCoordinates = useAtomValue(showCoordinatesAtom);
   const moveMethod = useAtomValue(moveMethodAtom);
   const gameState = useAtomValue(currentGameStateAtom);
   const players = useAtomValue(currentPlayersAtom);
@@ -91,6 +94,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const showVariationArrows = useAtomValue(showVariationArrowsAtom);
   const snapArrows = useAtomValue(snapArrowsAtom);
   const engineArrows = useAtomValue(xiangqiEngineArrowsAtom);
+  const cloudArrows = useAtomValue(xiangqiCloudArrowsAtom);
   const engineEvaluation = useAtomValue(xiangqiEvaluationAtom);
   const clearDrawingsSignal = useAtomValue(xiangqiClearDrawingsSignalAtom);
   const previousClearDrawingsSignal = useRef(clearDrawingsSignal);
@@ -113,6 +117,26 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     orientation === "red" ? headers.red || redLabel : headers.black || blackLabel;
   const topTime = orientation === "red" ? blackTime : whiteTime;
   const bottomTime = orientation === "red" ? whiteTime : blackTime;
+  const useCustomPieces =
+    pieceStyle === "custom-svg" &&
+    !customPieceTheme.loading &&
+    customPieceTheme.missing.length === 0;
+
+  useEffect(() => {
+    if (pieceStyle !== "custom-svg" || customPieceTheme.loading) return;
+    if (customPieceTheme.missing.length === 0) {
+      customPieceWarningShownRef.current = false;
+      return;
+    }
+    if (customPieceWarningShownRef.current) return;
+
+    customPieceWarningShownRef.current = true;
+    notifications.show({
+      color: "red",
+      title: "自定义 SVG 棋子不完整",
+      message: `请补齐 ${customPieceTheme.dir || "custom-pieces"} 中的文件：${customPieceTheme.missing.join("、")}`,
+    });
+  }, [pieceStyle, customPieceTheme.loading, customPieceTheme.missing, customPieceTheme.dir]);
 
   const toggleOrientation = () =>
     setHeaders({
@@ -392,16 +416,16 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
                 lastMove={lastMove}
                 orientation={orientation}
                 boardTheme={boardTheme}
-                pieceStyle={pieceStyle}
+                pieceStyle={useCustomPieces ? pieceStyle : "classic"}
                 pieceTextScale={pieceTextScale}
                 pieceInnerScale={pieceInnerScale}
                 pieceInnerRingVisible={pieceInnerRingVisible[pieceStyle] ?? true}
+                customPieceUrls={useCustomPieces ? customPieceTheme.urls : undefined}
                 showDests={showDests}
                 showLastMove={showLastMove}
-                showCoordinates={showCoordinates}
                 moveMethod={moveMethod}
                 shapes={drawnShapes}
-                autoShapes={[...analysisShapes, ...variationShapes]}
+                autoShapes={[...cloudArrows, ...analysisShapes, ...variationShapes]}
                 snapDrawings={snapArrows}
                 drawingsEnabled={!editingMode}
                 onShapesChange={setCurrentNodeShapes}
@@ -471,6 +495,13 @@ async function requestXiangqiBestMove(
       moves: [],
       depth: goMode.t === "Depth" ? Math.max(1, Math.min(goMode.c, 20)) : 8,
       multipv: 1,
+      extraOptions: engineSettings
+        .filter((setting) => !["Threads", "Hash", "MultiPV"].includes(setting.name))
+        .filter((setting) => setting.value !== null && setting.value !== undefined)
+        .map((setting) => ({
+          name: setting.name,
+          value: String(setting.value),
+        })),
       goMode,
     },
   });

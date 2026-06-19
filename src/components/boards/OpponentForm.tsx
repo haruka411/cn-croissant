@@ -3,8 +3,10 @@ import {
   Divider,
   Group,
   InputWrapper,
+  Slider,
   SegmentedControl,
   Stack,
+  Text,
   TextInput,
 } from "@mantine/core";
 import { IconCpu, IconUser } from "@tabler/icons-react";
@@ -31,6 +33,7 @@ export type OpponentSettings =
       engine: LocalEngine | null;
       go: GoMode;
       engineSettings?: EngineSettings;
+      difficulty?: number;
       timeUnit?: TimeType;
       incrementUnit?: TimeType;
     };
@@ -66,6 +69,7 @@ export function OpponentForm({
         type: "engine",
         engine: null,
         go: ("go" in prev && prev.go) || { t: "Depth", c: 24 },
+        difficulty: ("difficulty" in prev && prev.difficulty) || 20,
       }));
     }
   }
@@ -111,7 +115,7 @@ export function OpponentForm({
             setOpponent((prev) => ({
               ...prev,
               engine,
-              engineSettings: engine?.settings || undefined,
+              engineSettings: applyEngineDifficulty(engine?.settings || undefined, "difficulty" in prev ? prev.difficulty : 20),
             }))
           }
         />
@@ -208,6 +212,43 @@ export function OpponentForm({
 
       {opponent.type === "engine" && (
         <Stack>
+          <Stack gap={4}>
+            <Group justify="space-between">
+              <Text size="sm" fw={700}>
+                {t("Board.Opponent.Difficulty")}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {opponent.difficulty ?? 20}/20
+              </Text>
+            </Group>
+            <Slider
+              min={1}
+              max={20}
+              step={1}
+              value={opponent.difficulty ?? 20}
+              marks={[
+                { value: 1, label: "1" },
+                { value: 10, label: "10" },
+                { value: 20, label: "20" },
+              ]}
+              onChange={(difficulty) =>
+                setOpponent((prev) => {
+                  if (prev.type === "human") return prev;
+                  return {
+                    ...prev,
+                    difficulty,
+                    engineSettings: applyEngineDifficulty(
+                      prev.engineSettings || prev.engine?.settings || [],
+                      difficulty,
+                    ),
+                  };
+                })
+              }
+            />
+            <Text size="xs" c="dimmed">
+              {t("Board.Opponent.Difficulty.Desc")}
+            </Text>
+          </Stack>
           {!opponent.timeControl && (
             <GoModeInput
               gameMode
@@ -251,7 +292,7 @@ export function OpponentForm({
                   return {
                     ...prev,
                     go: newSettings.go,
-                    engineSettings: newSettings.settings,
+                    engineSettings: applyEngineDifficulty(newSettings.settings, prev.difficulty ?? 20),
                   };
                 })
               }
@@ -262,4 +303,29 @@ export function OpponentForm({
       )}
     </Stack>
   );
+}
+
+function applyEngineDifficulty(
+  settings: EngineSettings | undefined,
+  difficulty = 20,
+): EngineSettings {
+  const next = [...(settings ?? [])];
+  const clamped = Math.max(1, Math.min(20, Math.trunc(difficulty)));
+  const limited = clamped < 20;
+  const elo = Math.round(1350 + ((clamped - 1) / 18) * 1500);
+  const skill = clamped;
+
+  upsertSetting(next, "UCI_LimitStrength", limited);
+  upsertSetting(next, "UCI_Elo", limited ? elo : 2850);
+  upsertSetting(next, "Skill Level", skill);
+  return next;
+}
+
+function upsertSetting(settings: EngineSettings, name: string, value: string | number | boolean) {
+  const index = settings.findIndex((setting) => setting.name === name);
+  if (index >= 0) {
+    settings[index] = { ...settings[index], value };
+  } else {
+    settings.push({ name, value });
+  }
 }

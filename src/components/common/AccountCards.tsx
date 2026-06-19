@@ -3,7 +3,6 @@ import {
   Divider,
   Group,
   ScrollArea,
-  SimpleGrid,
   Stack,
   Text,
   TextInput,
