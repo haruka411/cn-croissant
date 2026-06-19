@@ -248,6 +248,10 @@ export type XiangqiBoardTheme =
     | "crystal";
 
 export const pieceSetAtom = atomWithStorage<XiangqiPieceStyle>("piece-set", "classic");
+export const customPieceThemeConfirmedAtom = atomWithStorage<boolean>(
+    "custom-piece-theme-confirmed-v1",
+    false,
+);
 export const xiangqiPieceTextScaleAtom = atomWithStorage<number>("xiangqi-piece-text-scale", 100);
 export const xiangqiPieceInnerScaleAtom = atomWithStorage<number>("xiangqi-piece-inner-scale", 80);
 export type XiangqiPieceInnerRingVisibility = Partial<Record<XiangqiPieceStyle, boolean>>;

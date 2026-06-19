@@ -32,6 +32,7 @@ import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   boardImageAtom,
+  customPieceThemeConfirmedAtom,
   moveHighlightAtom,
   moveMethodAtom,
   pieceSetAtom,
@@ -99,6 +100,7 @@ export default function XiangqiPuzzleTrainer() {
 
   const boardTheme = useAtomValue(boardImageAtom);
   const pieceStyle = useAtomValue(pieceSetAtom);
+  const customPieceThemeConfirmed = useAtomValue(customPieceThemeConfirmedAtom);
   const pieceTextScale = useAtomValue(xiangqiPieceTextScaleAtom);
   const pieceInnerScale = useAtomValue(xiangqiPieceInnerScaleAtom);
   const pieceInnerRingVisible = useAtomValue(xiangqiPieceInnerRingVisibleAtom);
@@ -126,13 +128,22 @@ export default function XiangqiPuzzleTrainer() {
   const trainerSideLabel = orientation === "red" ? "红方" : "黑方";
   const toMoveLabel = position.turn === "red" ? "红方" : "黑方";
   const canUserMove = status === "ready" || status === "wrong";
+  const customPieceThemeChecked = customPieceTheme.checkedDirs.length > 0;
   const useCustomPieces =
     pieceStyle === "custom-svg" &&
+    customPieceThemeConfirmed &&
+    customPieceThemeChecked &&
     !customPieceTheme.loading &&
     customPieceTheme.missing.length === 0;
 
   useEffect(() => {
-    if (pieceStyle !== "custom-svg" || customPieceTheme.loading) return;
+    if (
+      pieceStyle !== "custom-svg" ||
+      !customPieceThemeConfirmed ||
+      customPieceTheme.loading ||
+      !customPieceThemeChecked
+    )
+      return;
     if (customPieceTheme.missing.length === 0) {
       customPieceWarningShownRef.current = false;
       return;
@@ -143,9 +154,16 @@ export default function XiangqiPuzzleTrainer() {
     notifications.show({
       color: "red",
       title: "自定义 SVG 棋子不完整",
-      message: `请补齐 ${customPieceTheme.dir || "custom-pieces"} 中的文件：${customPieceTheme.missing.join("、")}`,
+      message: `已检查：${customPieceTheme.checkedDirs.join("；")}。请补齐文件：${customPieceTheme.missing.join("、")}`,
     });
-  }, [pieceStyle, customPieceTheme.loading, customPieceTheme.missing, customPieceTheme.dir]);
+  }, [
+    pieceStyle,
+    customPieceThemeConfirmed,
+    customPieceTheme.loading,
+    customPieceThemeChecked,
+    customPieceTheme.missing,
+    customPieceTheme.checkedDirs,
+  ]);
   const acceptedMoves = useMemo(
     () => acceptedMoveSet(candidateMoves, targetMove),
     [candidateMoves, targetMove],
@@ -345,7 +363,13 @@ export default function XiangqiPuzzleTrainer() {
                     lastMove={lastMove}
                     orientation={orientation}
                     boardTheme={boardTheme}
-                    pieceStyle={useCustomPieces ? pieceStyle : "classic"}
+                    pieceStyle={
+                      useCustomPieces
+                        ? "custom-svg"
+                        : pieceStyle === "custom-svg"
+                          ? "classic"
+                          : pieceStyle
+                    }
                     pieceTextScale={pieceTextScale}
                     pieceInnerScale={pieceInnerScale}
                     pieceInnerRingVisible={pieceInnerRingVisible[pieceStyle] ?? true}

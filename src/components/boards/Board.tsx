@@ -9,6 +9,7 @@ import type { GoMode } from "@/bindings";
 import type { ChessgroundRef } from "@/chessground/Chessground";
 import {
   boardImageAtom,
+  customPieceThemeConfirmedAtom,
   currentGameStateAtom,
   currentPlayersAtom,
   currentTabAtom,
@@ -79,6 +80,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const lastMove = currentNode.move ? parseUciMove(currentNode.move) : null;
   const boardTheme = useAtomValue(boardImageAtom);
   const pieceStyle = useAtomValue(pieceSetAtom);
+  const customPieceThemeConfirmed = useAtomValue(customPieceThemeConfirmedAtom);
   const pieceTextScale = useAtomValue(xiangqiPieceTextScaleAtom);
   const pieceInnerScale = useAtomValue(xiangqiPieceInnerScaleAtom);
   const pieceInnerRingVisible = useAtomValue(xiangqiPieceInnerRingVisibleAtom);
@@ -117,13 +119,22 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     orientation === "red" ? headers.red || redLabel : headers.black || blackLabel;
   const topTime = orientation === "red" ? blackTime : whiteTime;
   const bottomTime = orientation === "red" ? whiteTime : blackTime;
+  const customPieceThemeChecked = customPieceTheme.checkedDirs.length > 0;
   const useCustomPieces =
     pieceStyle === "custom-svg" &&
+    customPieceThemeConfirmed &&
+    customPieceThemeChecked &&
     !customPieceTheme.loading &&
     customPieceTheme.missing.length === 0;
 
   useEffect(() => {
-    if (pieceStyle !== "custom-svg" || customPieceTheme.loading) return;
+    if (
+      pieceStyle !== "custom-svg" ||
+      !customPieceThemeConfirmed ||
+      customPieceTheme.loading ||
+      !customPieceThemeChecked
+    )
+      return;
     if (customPieceTheme.missing.length === 0) {
       customPieceWarningShownRef.current = false;
       return;
@@ -134,9 +145,16 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     notifications.show({
       color: "red",
       title: "自定义 SVG 棋子不完整",
-      message: `请补齐 ${customPieceTheme.dir || "custom-pieces"} 中的文件：${customPieceTheme.missing.join("、")}`,
+      message: `已检查：${customPieceTheme.checkedDirs.join("；")}。请补齐文件：${customPieceTheme.missing.join("、")}`,
     });
-  }, [pieceStyle, customPieceTheme.loading, customPieceTheme.missing, customPieceTheme.dir]);
+  }, [
+    pieceStyle,
+    customPieceThemeConfirmed,
+    customPieceTheme.loading,
+    customPieceThemeChecked,
+    customPieceTheme.missing,
+    customPieceTheme.checkedDirs,
+  ]);
 
   const toggleOrientation = () =>
     setHeaders({
@@ -416,7 +434,13 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
                 lastMove={lastMove}
                 orientation={orientation}
                 boardTheme={boardTheme}
-                pieceStyle={useCustomPieces ? pieceStyle : "classic"}
+                pieceStyle={
+                  useCustomPieces
+                    ? "custom-svg"
+                    : pieceStyle === "custom-svg"
+                      ? "classic"
+                      : pieceStyle
+                }
                 pieceTextScale={pieceTextScale}
                 pieceInnerScale={pieceInnerScale}
                 pieceInnerRingVisible={pieceInnerRingVisible[pieceStyle] ?? true}

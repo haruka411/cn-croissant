@@ -2,8 +2,9 @@ import { Box, Button, Flex, Group, Select, Slider, Stack, Switch, Text } from "@
 import { notifications } from "@mantine/notifications";
 import clsx from "clsx";
 import { useAtom } from "jotai";
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import {
+  customPieceThemeConfirmedAtom,
   pieceSetAtom,
   type XiangqiPieceStyle,
   xiangqiPieceInnerScaleAtom,
@@ -103,6 +104,9 @@ function PiecePreview({
 
 export default function PiecesSelect() {
   const [pieceSet, setPieceSet] = useAtom(pieceSetAtom);
+  const [customPieceThemeConfirmed, setCustomPieceThemeConfirmed] = useAtom(
+    customPieceThemeConfirmedAtom,
+  );
   const [textScale, setTextScale] = useAtom(xiangqiPieceTextScaleAtom);
   const [innerScale, setInnerScale] = useAtom(xiangqiPieceInnerScaleAtom);
   const [innerRingVisible, setInnerRingVisible] = useAtom(xiangqiPieceInnerRingVisibleAtom);
@@ -119,6 +123,11 @@ export default function PiecesSelect() {
     XIANGQI_PIECE_INNER_SCALE_MIN,
     Math.min(innerScale, XIANGQI_PIECE_INNER_SCALE_MAX),
   );
+
+  useEffect(() => {
+    if (pieceSet !== "custom-svg" || customPieceThemeConfirmed) return;
+    setPieceSet("classic");
+  }, [pieceSet, customPieceThemeConfirmed, setPieceSet]);
 
   return (
     <Stack gap="xs" w="19.5rem">
@@ -138,6 +147,7 @@ export default function PiecesSelect() {
           onChange={async (value) => {
             if (!value) return;
             if (value !== "custom-svg") {
+              setCustomPieceThemeConfirmed(false);
               setPieceSet(value as XiangqiPieceStyle);
               return;
             }
@@ -149,10 +159,11 @@ export default function PiecesSelect() {
                 notifications.show({
                   color: "red",
                   title: "自定义 SVG 棋子不完整",
-                  message: `请补齐 ${theme.dir} 中的文件：${theme.missing.join("、")}`,
+                  message: `已检查：${theme.checkedDirs.join("；")}。请补齐文件：${theme.missing.join("、")}`,
                 });
                 return;
               }
+              setCustomPieceThemeConfirmed(true);
               setPieceSet("custom-svg");
             } catch {
               notifications.show({
