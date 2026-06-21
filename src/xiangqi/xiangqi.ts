@@ -657,13 +657,14 @@ const CHINESE_NOTATION_LABELS: Record<XiangqiColor, Record<XiangqiRole, string>>
 };
 
 const CHINESE_NOTATION_NUMBERS = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+const FULLWIDTH_NOTATION_DIGITS = ["０", "１", "２", "３", "４", "５", "６", "７", "８", "９"];
 
 function notationFileNumber(file: number, color: XiangqiColor): number {
     return color === "red" ? 9 - file : file + 1;
 }
 
 function formatNotationNumber(number: number, color: XiangqiColor): string {
-    if (color === "black") return String(number);
+    if (color === "black") return FULLWIDTH_NOTATION_DIGITS[number] ?? String(number);
     return CHINESE_NOTATION_NUMBERS[number] ?? String(number);
 }
 

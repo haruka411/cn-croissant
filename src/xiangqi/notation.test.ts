@@ -106,7 +106,7 @@ describe("xiangqi notation", () => {
         const chinese = exportGame(game, { moveFormat: "chinese" });
 
         expect(wxf).toContain("1. C2=5 H8+7");
-        expect(chinese).toContain("1. 炮二平五 马8进7");
+        expect(chinese).toContain("1. 炮二平五 马８进７");
         expect(getNodeAtPath(makeGameFromNotation(wxf).root, [0]).move).toBe("h2e2");
         expect(getNodeAtPath(makeGameFromNotation(chinese).root, [0, 0]).move).toBe("h9g7");
     });

@@ -260,9 +260,10 @@ const WXF_SELECTOR_LABELS: Record<"front" | "middle" | "rear", string> = {
 };
 
 const CHINESE_NUMBER_LABELS = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+const FULLWIDTH_DIGIT_LABELS = ["０", "１", "２", "３", "４", "５", "６", "７", "８", "９"];
 
 function formatChineseNumber(number: number, color: XiangqiColor): string {
-    if (color === "black") return String(number);
+    if (color === "black") return FULLWIDTH_DIGIT_LABELS[number] ?? String(number);
     return CHINESE_NUMBER_LABELS[number] ?? String(number);
 }
 

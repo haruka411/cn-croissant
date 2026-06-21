@@ -172,8 +172,13 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
   const [engineSettingsOverrides, setEngineSettingsOverrides] = useState<
     Record<string, XiangqiEngineSettings>
   >({});
+  const engineSettingsOverridesRef = useRef<Record<string, XiangqiEngineSettings>>({});
   const [threatMode, setThreatMode] = useState(false);
   const [pinnedEngineIds, setPinnedEngineIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    engineSettingsOverridesRef.current = engineSettingsOverrides;
+  }, [engineSettingsOverrides]);
 
   const localEngines = useMemo(
     () => (engines ?? []).filter((engine): engine is LocalEngine => engine.type === "local"),
@@ -210,13 +215,18 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
       const engine = loadedEngines.find((candidate) => candidate.id === engineId);
       if (!engine) return;
 
-      const currentSettings = getXiangqiSettings(engine, engineSettingsOverrides[engineId]);
+      const currentSettings = getXiangqiSettings(
+        engine,
+        engineSettingsOverridesRef.current[engineId],
+      );
       const nextSettings = normalizeXiangqiSettings(updater(currentSettings));
-
-      setEngineSettingsOverrides((previous) => ({
-        ...previous,
+      const nextOverrides = {
+        ...engineSettingsOverridesRef.current,
         [engineId]: nextSettings,
-      }));
+      };
+
+      engineSettingsOverridesRef.current = nextOverrides;
+      setEngineSettingsOverrides(nextOverrides);
 
       if (!nextSettings.synced) return;
 
@@ -233,7 +243,7 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
         ),
       );
     },
-    [engineSettingsOverrides, loadedEngines, setEngines],
+    [loadedEngines, setEngines],
   );
 
   useEffect(() => {
@@ -1628,12 +1638,12 @@ function getXiangqiSettings(
   engine: LocalEngine,
   override: XiangqiEngineSettings | undefined,
 ): XiangqiEngineSettings {
-  if (override && !override.synced) {
+  if (override) {
     return normalizeXiangqiSettings(override);
   }
 
   return normalizeXiangqiSettings({
-    enabled: override?.enabled ?? false,
+    enabled: engine.enabled ?? false,
     go: normalizeXiangqiGoMode(engine.go),
     settings: engine.settings ?? [],
     synced: true,

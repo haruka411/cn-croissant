@@ -26,6 +26,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[derive(Default)]
 struct AppState {
     xiangqi_analysis_processes: Mutex<HashMap<String, Arc<Mutex<XiangqiAnalysisProcess>>>>,
+    xiangqi_games: Mutex<HashMap<String, Arc<Mutex<XiangqiGameController>>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +97,230 @@ struct BuiltinEngine {
     protocol: EngineProtocol,
 }
 
+type GameId = String;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum XiangqiPlayerConfig {
+    Human { name: String },
+    Engine {
+        name: String,
+        path: String,
+        protocol: Option<EngineProtocol>,
+        #[serde(default)]
+        options: Vec<EngineOption>,
+        go: Option<GoMode>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct XiangqiTimeControl {
+    initial_time: u64,
+    increment: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct XiangqiGameConfig {
+    white: XiangqiPlayerConfig,
+    black: XiangqiPlayerConfig,
+    white_time_control: Option<XiangqiTimeControl>,
+    black_time_control: Option<XiangqiTimeControl>,
+    initial_fen: Option<String>,
+    #[serde(default)]
+    initial_moves: Vec<String>,
+    #[allow(dead_code)]
+    opening_book: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum GameStatus {
+    Playing,
+    Finished { result: GameResult },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum GameResult {
+    WhiteWins { reason: GameEndReason },
+    BlackWins { reason: GameEndReason },
+    Draw { reason: DrawReason },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum GameEndReason {
+    Checkmate,
+    Timeout,
+    Resignation,
+    Abandonment,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum DrawReason {
+    Stalemate,
+    InsufficientMaterial,
+    ThreefoldRepetition,
+    FiftyMoveRule,
+    Agreement,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameMove {
+    uci: String,
+    san: String,
+    fen_after: String,
+    clock: Option<u64>,
+    white_time: Option<u64>,
+    black_time: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameState {
+    game_id: GameId,
+    status: GameStatus,
+    initial_fen: String,
+    moves: Vec<GameMove>,
+    current_fen: String,
+    ply: u32,
+    turn: String,
+    white_time: Option<u64>,
+    black_time: Option<u64>,
+    white_player: String,
+    black_player: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameMoveEvent {
+    game_id: GameId,
+    moves: Vec<GameMove>,
+    fen: String,
+    white_time: Option<u64>,
+    black_time: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClockUpdateEvent {
+    game_id: GameId,
+    white_time: Option<u64>,
+    black_time: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameOverEvent {
+    game_id: GameId,
+    result: GameResult,
+    moves: Vec<GameMove>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum EngineLogEvent {
+    Gui { value: String },
+    Engine { value: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XiangqiColor {
+    Red,
+    Black,
+}
+
+impl XiangqiColor {
+    fn opposite(self) -> Self {
+        match self {
+            Self::Red => Self::Black,
+            Self::Black => Self::Red,
+        }
+    }
+
+    fn to_turn_string(self) -> String {
+        match self {
+            Self::Red => "white".to_string(),
+            Self::Black => "black".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XiangqiRole {
+    King,
+    Advisor,
+    Elephant,
+    Horse,
+    Rook,
+    Cannon,
+    Pawn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct XiangqiPiece {
+    color: XiangqiColor,
+    role: XiangqiRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct XiangqiMove {
+    from: (usize, usize),
+    to: (usize, usize),
+}
+
+#[derive(Debug, Clone)]
+struct XiangqiPosition {
+    board: [[Option<XiangqiPiece>; 9]; 10],
+    turn: XiangqiColor,
+    halfmove: u32,
+    fullmove: u32,
+}
+
+#[derive(Debug, Clone)]
+struct XiangqiMoveResult {
+    position: XiangqiPosition,
+    captured: Option<XiangqiPiece>,
+    san: String,
+    check: bool,
+}
+
+#[derive(Debug)]
+struct XiangqiClockState {
+    white_time: Option<u64>,
+    black_time: Option<u64>,
+    white_increment: u64,
+    black_increment: u64,
+    last_tick: Instant,
+}
+
+struct XiangqiGameEngine {
+    runtime: EngineRuntime,
+    config: LocalEngineConfig,
+    logs: Vec<String>,
+}
+
+struct XiangqiGameController {
+    game_id: GameId,
+    config: XiangqiGameConfig,
+    initial_fen: String,
+    moves: Vec<GameMove>,
+    position: XiangqiPosition,
+    position_history: HashMap<String, u32>,
+    status: GameStatus,
+    clock: Option<XiangqiClockState>,
+    white_engine: Option<XiangqiGameEngine>,
+    black_engine: Option<XiangqiGameEngine>,
+    white_engine_pid: Option<u32>,
+    black_engine_pid: Option<u32>,
+    shutdown: bool,
+    engine_thinking: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AnalyzeRequest {
@@ -130,6 +355,1099 @@ struct EngineAnalysisUpdate {
     progress: f64,
     finished: bool,
     analysis: EngineAnalysis,
+}
+
+const INITIAL_XIANGQI_FEN: &str =
+    "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
+const XIANGQI_FILES: [char; 9] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
+
+impl XiangqiPosition {
+    fn parse(fen: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = fen.trim().split_whitespace().collect();
+        let board_part = parts.first().ok_or("missing Xiangqi FEN board")?;
+        let ranks: Vec<&str> = board_part.split('/').collect();
+        if ranks.len() != 10 {
+            return Err("Xiangqi FEN must have 10 ranks".to_string());
+        }
+
+        let mut board = [[None; 9]; 10];
+        for (rank_index, rank_text) in ranks.iter().enumerate() {
+            let rank = 9usize.saturating_sub(rank_index);
+            let mut file = 0usize;
+            for ch in rank_text.chars() {
+                if ch.is_ascii_digit() {
+                    file += ch.to_digit(10).unwrap_or(0) as usize;
+                    continue;
+                }
+                if file >= 9 {
+                    return Err(format!("too many files in rank: {}", rank_text));
+                }
+                let role = match ch.to_ascii_lowercase() {
+                    'k' => XiangqiRole::King,
+                    'a' => XiangqiRole::Advisor,
+                    'b' | 'e' => XiangqiRole::Elephant,
+                    'n' | 'h' => XiangqiRole::Horse,
+                    'r' => XiangqiRole::Rook,
+                    'c' => XiangqiRole::Cannon,
+                    'p' => XiangqiRole::Pawn,
+                    _ => return Err(format!("invalid Xiangqi piece: {}", ch)),
+                };
+                board[rank][file] = Some(XiangqiPiece {
+                    color: if ch.is_ascii_uppercase() {
+                        XiangqiColor::Red
+                    } else {
+                        XiangqiColor::Black
+                    },
+                    role,
+                });
+                file += 1;
+            }
+            if file != 9 {
+                return Err(format!("rank does not contain 9 files: {}", rank_text));
+            }
+        }
+
+        let turn = match parts.get(1).copied().unwrap_or("w").to_ascii_lowercase().as_str() {
+            "w" | "r" | "red" => XiangqiColor::Red,
+            "b" | "black" => XiangqiColor::Black,
+            raw => return Err(format!("invalid side to move: {}", raw)),
+        };
+        let halfmove = parts
+            .get(4)
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        let fullmove = parts
+            .get(5)
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(1);
+
+        Ok(Self {
+            board,
+            turn,
+            halfmove,
+            fullmove,
+        })
+    }
+
+    fn to_fen(&self) -> String {
+        let mut ranks = Vec::new();
+        for rank in (0..10).rev() {
+            let mut text = String::new();
+            let mut empty = 0usize;
+            for file in 0..9 {
+                if let Some(piece) = self.board[rank][file] {
+                    if empty > 0 {
+                        text.push_str(&empty.to_string());
+                        empty = 0;
+                    }
+                    let mut ch = match piece.role {
+                        XiangqiRole::King => 'k',
+                        XiangqiRole::Advisor => 'a',
+                        XiangqiRole::Elephant => 'b',
+                        XiangqiRole::Horse => 'n',
+                        XiangqiRole::Rook => 'r',
+                        XiangqiRole::Cannon => 'c',
+                        XiangqiRole::Pawn => 'p',
+                    };
+                    if piece.color == XiangqiColor::Red {
+                        ch = ch.to_ascii_uppercase();
+                    }
+                    text.push(ch);
+                } else {
+                    empty += 1;
+                }
+            }
+            if empty > 0 {
+                text.push_str(&empty.to_string());
+            }
+            ranks.push(text);
+        }
+
+        let turn = if self.turn == XiangqiColor::Red { "w" } else { "b" };
+        format!(
+            "{} {} - - {} {}",
+            ranks.join("/"),
+            turn,
+            self.halfmove,
+            self.fullmove
+        )
+    }
+
+    fn position_key(&self) -> String {
+        self.to_fen()
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn parse_xiangqi_uci_move(text: &str) -> Result<XiangqiMove, String> {
+    let clean = text.trim().to_ascii_lowercase();
+    let chars: Vec<char> = clean.chars().collect();
+    if chars.len() != 4 {
+        return Err(format!("invalid move: {}", text));
+    }
+    Ok(XiangqiMove {
+        from: parse_xiangqi_square(chars[0], chars[1])?,
+        to: parse_xiangqi_square(chars[2], chars[3])?,
+    })
+}
+
+fn parse_xiangqi_square(file: char, rank: char) -> Result<(usize, usize), String> {
+    let file = XIANGQI_FILES
+        .iter()
+        .position(|candidate| *candidate == file)
+        .ok_or_else(|| "invalid file".to_string())?;
+    let rank = rank
+        .to_digit(10)
+        .map(|value| value as usize)
+        .ok_or_else(|| "invalid rank".to_string())?;
+    if rank >= 10 {
+        return Err("invalid rank".to_string());
+    }
+    Ok((file, rank))
+}
+
+fn make_xiangqi_uci_move(mv: XiangqiMove) -> String {
+    format!(
+        "{}{}{}{}",
+        XIANGQI_FILES[mv.from.0], mv.from.1, XIANGQI_FILES[mv.to.0], mv.to.1
+    )
+}
+
+fn in_bounds(file: isize, rank: isize) -> bool {
+    (0..9).contains(&file) && (0..10).contains(&rank)
+}
+
+fn in_palace(color: XiangqiColor, file: isize, rank: isize) -> bool {
+    if !(3..=5).contains(&file) {
+        return false;
+    }
+    match color {
+        XiangqiColor::Red => (0..=2).contains(&rank),
+        XiangqiColor::Black => (7..=9).contains(&rank),
+    }
+}
+
+fn find_king(position: &XiangqiPosition, color: XiangqiColor) -> Option<(usize, usize)> {
+    for rank in 0..10 {
+        for file in 0..9 {
+            if position.board[rank][file]
+                == Some(XiangqiPiece {
+                    color,
+                    role: XiangqiRole::King,
+                })
+            {
+                return Some((file, rank));
+            }
+        }
+    }
+    None
+}
+
+fn clear_file(position: &XiangqiPosition, file: usize, from_rank: usize, to_rank: usize) -> bool {
+    let (start, end) = if from_rank < to_rank {
+        (from_rank + 1, to_rank)
+    } else {
+        (to_rank + 1, from_rank)
+    };
+    for rank in start..end {
+        if position.board[rank][file].is_some() {
+            return false;
+        }
+    }
+    true
+}
+
+fn push_if_available(
+    moves: &mut Vec<XiangqiMove>,
+    position: &XiangqiPosition,
+    piece: XiangqiPiece,
+    from: (usize, usize),
+    file: isize,
+    rank: isize,
+) {
+    if !in_bounds(file, rank) {
+        return;
+    }
+    let target = position.board[rank as usize][file as usize];
+    if target.map(|p| p.color != piece.color).unwrap_or(true) {
+        moves.push(XiangqiMove {
+            from,
+            to: (file as usize, rank as usize),
+        });
+    }
+}
+
+fn pseudo_moves_for_piece(
+    position: &XiangqiPosition,
+    from: (usize, usize),
+    piece: XiangqiPiece,
+) -> Vec<XiangqiMove> {
+    let mut moves = Vec::new();
+    let file = from.0 as isize;
+    let rank = from.1 as isize;
+
+    match piece.role {
+        XiangqiRole::King => {
+            for (df, dr) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let nf = file + df;
+                let nr = rank + dr;
+                if in_palace(piece.color, nf, nr) {
+                    push_if_available(&mut moves, position, piece, from, nf, nr);
+                }
+            }
+            if let Some(enemy_king) = find_king(position, piece.color.opposite()) {
+                if enemy_king.0 == from.0 && clear_file(position, from.0, from.1, enemy_king.1) {
+                    moves.push(XiangqiMove {
+                        from,
+                        to: enemy_king,
+                    });
+                }
+            }
+        }
+        XiangqiRole::Advisor => {
+            for (df, dr) in [(1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                let nf = file + df;
+                let nr = rank + dr;
+                if in_palace(piece.color, nf, nr) {
+                    push_if_available(&mut moves, position, piece, from, nf, nr);
+                }
+            }
+        }
+        XiangqiRole::Elephant => {
+            for (df, dr) in [(2, 2), (2, -2), (-2, 2), (-2, -2)] {
+                let nf = file + df;
+                let nr = rank + dr;
+                let eye_file = file + df / 2;
+                let eye_rank = rank + dr / 2;
+                let crossed_river = match piece.color {
+                    XiangqiColor::Red => nr > 4,
+                    XiangqiColor::Black => nr < 5,
+                };
+                if !in_bounds(nf, nr) || crossed_river {
+                    continue;
+                }
+                if position.board[eye_rank as usize][eye_file as usize].is_some() {
+                    continue;
+                }
+                push_if_available(&mut moves, position, piece, from, nf, nr);
+            }
+        }
+        XiangqiRole::Horse => {
+            for (df, dr, leg_df, leg_dr) in [
+                (1, 2, 0, 1),
+                (-1, 2, 0, 1),
+                (1, -2, 0, -1),
+                (-1, -2, 0, -1),
+                (2, 1, 1, 0),
+                (2, -1, 1, 0),
+                (-2, 1, -1, 0),
+                (-2, -1, -1, 0),
+            ] {
+                let nf = file + df;
+                let nr = rank + dr;
+                if !in_bounds(nf, nr) {
+                    continue;
+                }
+                if position.board[(rank + leg_dr) as usize][(file + leg_df) as usize].is_some() {
+                    continue;
+                }
+                push_if_available(&mut moves, position, piece, from, nf, nr);
+            }
+        }
+        XiangqiRole::Rook | XiangqiRole::Cannon => {
+            let cannon = piece.role == XiangqiRole::Cannon;
+            for (df, dr) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let mut nf = file + df;
+                let mut nr = rank + dr;
+                let mut screen_seen = false;
+                while in_bounds(nf, nr) {
+                    let target = position.board[nr as usize][nf as usize];
+                    if !cannon {
+                        if let Some(target) = target {
+                            if target.color != piece.color {
+                                moves.push(XiangqiMove {
+                                    from,
+                                    to: (nf as usize, nr as usize),
+                                });
+                            }
+                            break;
+                        }
+                        moves.push(XiangqiMove {
+                            from,
+                            to: (nf as usize, nr as usize),
+                        });
+                    } else if !screen_seen {
+                        if target.is_none() {
+                            moves.push(XiangqiMove {
+                                from,
+                                to: (nf as usize, nr as usize),
+                            });
+                        } else {
+                            screen_seen = true;
+                        }
+                    } else if let Some(target) = target {
+                        if target.color != piece.color {
+                            moves.push(XiangqiMove {
+                                from,
+                                to: (nf as usize, nr as usize),
+                            });
+                        }
+                        break;
+                    }
+                    nf += df;
+                    nr += dr;
+                }
+            }
+        }
+        XiangqiRole::Pawn => {
+            let forward = if piece.color == XiangqiColor::Red { 1 } else { -1 };
+            push_if_available(&mut moves, position, piece, from, file, rank + forward);
+            let crossed_river = match piece.color {
+                XiangqiColor::Red => rank >= 5,
+                XiangqiColor::Black => rank <= 4,
+            };
+            if crossed_river {
+                push_if_available(&mut moves, position, piece, from, file - 1, rank);
+                push_if_available(&mut moves, position, piece, from, file + 1, rank);
+            }
+        }
+    }
+
+    moves
+}
+
+fn is_xiangqi_in_check(position: &XiangqiPosition, color: XiangqiColor) -> bool {
+    let Some(king) = find_king(position, color) else {
+        return true;
+    };
+
+    for rank in 0..10 {
+        for file in 0..9 {
+            let Some(piece) = position.board[rank][file] else {
+                continue;
+            };
+            if piece.color == color {
+                continue;
+            }
+            if pseudo_moves_for_piece(position, (file, rank), piece)
+                .iter()
+                .any(|mv| mv.to == king)
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn apply_xiangqi_move_unchecked(
+    position: &XiangqiPosition,
+    mv: XiangqiMove,
+) -> Result<XiangqiMoveResult, String> {
+    let piece = position.board[mv.from.1][mv.from.0]
+        .ok_or_else(|| format!("no piece on {}", make_xiangqi_uci_move(mv)))?;
+    let mut next = position.clone();
+    let captured = next.board[mv.to.1][mv.to.0];
+    next.board[mv.from.1][mv.from.0] = None;
+    next.board[mv.to.1][mv.to.0] = Some(piece);
+    next.turn = position.turn.opposite();
+    next.halfmove = if captured.is_some() {
+        0
+    } else {
+        position.halfmove + 1
+    };
+    next.fullmove = if position.turn == XiangqiColor::Black {
+        position.fullmove + 1
+    } else {
+        position.fullmove
+    };
+    let check = is_xiangqi_in_check(&next, next.turn);
+    let san = make_xiangqi_uci_move(mv);
+
+    Ok(XiangqiMoveResult {
+        position: next,
+        captured,
+        san,
+        check,
+    })
+}
+
+fn legal_xiangqi_moves(position: &XiangqiPosition) -> Vec<XiangqiMove> {
+    let mut result = Vec::new();
+    for rank in 0..10 {
+        for file in 0..9 {
+            let Some(piece) = position.board[rank][file] else {
+                continue;
+            };
+            if piece.color != position.turn {
+                continue;
+            }
+            for mv in pseudo_moves_for_piece(position, (file, rank), piece) {
+                if let Ok(next) = apply_xiangqi_move_unchecked(position, mv) {
+                    if !is_xiangqi_in_check(&next.position, piece.color) {
+                        result.push(mv);
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+fn apply_xiangqi_move(
+    position: &XiangqiPosition,
+    mv: XiangqiMove,
+) -> Result<XiangqiMoveResult, String> {
+    if !legal_xiangqi_moves(position).contains(&mv) {
+        return Err(format!("illegal move: {}", make_xiangqi_uci_move(mv)));
+    }
+    apply_xiangqi_move_unchecked(position, mv)
+}
+
+impl XiangqiGameEngine {
+    fn new(
+        name: String,
+        path: String,
+        protocol: Option<EngineProtocol>,
+        options: Vec<EngineOption>,
+        go: Option<GoMode>,
+    ) -> Result<Self, String> {
+        let mut config = LocalEngineConfig {
+            id: name.clone(),
+            name,
+            path,
+            protocol: protocol.unwrap_or(EngineProtocol::Ucci),
+            builtin: None,
+            threads: option_u32(&options, "Threads"),
+            hash: option_u32(&options, "Hash"),
+            move_time_ms: None,
+        };
+        let mut extra_options = Vec::new();
+        for option in options {
+            match option.name.as_str() {
+                "Threads" | "Hash" | "MultiPV" => {}
+                _ => extra_options.push(option),
+            }
+        }
+        if matches!(go, Some(GoMode::Time(value)) if value > 0) {
+            config.move_time_ms = match go {
+                Some(GoMode::Time(value)) => Some(value),
+                _ => None,
+            };
+        }
+
+        let mut runtime = spawn_engine(&config.path)?;
+        let mut logs = Vec::new();
+        init_engine(&mut runtime, &config, 1, &mut logs)?;
+        configure_extra_engine_options(
+            &mut runtime.stdin,
+            &config.protocol,
+            &extra_options,
+            &mut logs,
+        )?;
+        Ok(Self {
+            runtime,
+            config,
+            logs,
+        })
+    }
+
+    fn get_logs(&self) -> Vec<EngineLogEvent> {
+        self.logs
+            .iter()
+            .map(|line| {
+                if let Some(value) = line.strip_prefix("gui: ") {
+                    EngineLogEvent::Gui {
+                        value: value.to_string(),
+                    }
+                } else if let Some(value) = line.strip_prefix("engine: ") {
+                    EngineLogEvent::Engine {
+                        value: value.to_string(),
+                    }
+                } else {
+                    EngineLogEvent::Engine {
+                        value: line.to_string(),
+                    }
+                }
+            })
+            .collect()
+    }
+
+    fn quit(&mut self) {
+        let _ = send_line(&mut self.runtime, "quit", &mut self.logs);
+        let _ = self.runtime.child.kill();
+    }
+}
+
+fn kill_process_by_pid(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn option_u32(options: &[EngineOption], name: &str) -> Option<u32> {
+    options
+        .iter()
+        .find(|option| option.name == name)
+        .and_then(|option| option.value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+}
+
+impl XiangqiGameController {
+    fn new(game_id: GameId, config: XiangqiGameConfig) -> Result<Self, String> {
+        let initial_fen = config
+            .initial_fen
+            .clone()
+            .unwrap_or_else(|| INITIAL_XIANGQI_FEN.to_string());
+        let clock = if config.white_time_control.is_some() || config.black_time_control.is_some() {
+            Some(XiangqiClockState {
+                white_time: config.white_time_control.as_ref().map(|tc| tc.initial_time),
+                black_time: config.black_time_control.as_ref().map(|tc| tc.initial_time),
+                white_increment: config
+                    .white_time_control
+                    .as_ref()
+                    .map(|tc| tc.increment)
+                    .unwrap_or(0),
+                black_increment: config
+                    .black_time_control
+                    .as_ref()
+                    .map(|tc| tc.increment)
+                    .unwrap_or(0),
+                last_tick: Instant::now(),
+            })
+        } else {
+            None
+        };
+
+        let mut controller = Self {
+            game_id,
+            config,
+            initial_fen: initial_fen.clone(),
+            moves: Vec::new(),
+            position: XiangqiPosition::parse(&initial_fen)?,
+            position_history: HashMap::new(),
+            status: GameStatus::Playing,
+            clock,
+            white_engine: None,
+            black_engine: None,
+            white_engine_pid: None,
+            black_engine_pid: None,
+            shutdown: false,
+            engine_thinking: false,
+        };
+        let key = controller.position.position_key();
+        controller.position_history.insert(key, 1);
+        let initial_moves = controller.config.initial_moves.clone();
+        for mv in initial_moves {
+            controller.apply_move_no_clock(&mv)?;
+        }
+        controller.reset_clock();
+        Ok(controller)
+    }
+
+    fn get_state(&self) -> GameState {
+        let (white_time, black_time) = self.get_current_times();
+        GameState {
+            game_id: self.game_id.clone(),
+            status: self.status.clone(),
+            initial_fen: self.initial_fen.clone(),
+            moves: self.moves.clone(),
+            current_fen: self.position.to_fen(),
+            ply: self.moves.len() as u32,
+            turn: self.position.turn.to_turn_string(),
+            white_time,
+            black_time,
+            white_player: player_name(&self.config.white),
+            black_player: player_name(&self.config.black),
+        }
+    }
+
+    fn current_turn_player(&self) -> &XiangqiPlayerConfig {
+        if self.position.turn == XiangqiColor::Red {
+            &self.config.white
+        } else {
+            &self.config.black
+        }
+    }
+
+    fn is_engine_turn(&self) -> bool {
+        matches!(self.current_turn_player(), XiangqiPlayerConfig::Engine { .. })
+    }
+
+    fn apply_move(&mut self, uci: &str) -> Result<GameMove, String> {
+        if self.status != GameStatus::Playing {
+            return Err("game is not in progress".to_string());
+        }
+
+        let mv = parse_xiangqi_uci_move(uci)?;
+        let clock = self.clock.as_ref().and_then(|clock| {
+            if self.position.turn == XiangqiColor::Red {
+                clock.white_time
+            } else {
+                clock.black_time
+            }
+        });
+        let result = apply_xiangqi_move(&self.position, mv)?;
+
+        if let Some(ref mut clock_state) = self.clock {
+            let elapsed = clock_state.last_tick.elapsed().as_millis() as u64;
+            if self.position.turn == XiangqiColor::Red {
+                if let Some(ref mut wt) = clock_state.white_time {
+                    *wt = wt.saturating_sub(elapsed);
+                    *wt += clock_state.white_increment;
+                }
+            } else if let Some(ref mut bt) = clock_state.black_time {
+                *bt = bt.saturating_sub(elapsed);
+                *bt += clock_state.black_increment;
+            }
+            clock_state.last_tick = Instant::now();
+        }
+
+        self.position = result.position;
+        let key = self.position.position_key();
+        *self.position_history.entry(key).or_insert(0) += 1;
+        let (white_time, black_time) = self
+            .clock
+            .as_ref()
+            .map(|clock| (clock.white_time, clock.black_time))
+            .unwrap_or((None, None));
+        let game_move = GameMove {
+            uci: uci.to_string(),
+            san: result.san,
+            fen_after: self.position.to_fen(),
+            clock,
+            white_time,
+            black_time,
+        };
+        self.moves.push(game_move.clone());
+        self.check_game_end();
+        Ok(game_move)
+    }
+
+    fn apply_move_no_clock(&mut self, uci: &str) -> Result<GameMove, String> {
+        let mv = parse_xiangqi_uci_move(uci)?;
+        let result = apply_xiangqi_move(&self.position, mv)?;
+        self.position = result.position;
+        let key = self.position.position_key();
+        *self.position_history.entry(key).or_insert(0) += 1;
+        let (white_time, black_time) = self
+            .clock
+            .as_ref()
+            .map(|clock| (clock.white_time, clock.black_time))
+            .unwrap_or((None, None));
+        let game_move = GameMove {
+            uci: uci.to_string(),
+            san: result.san,
+            fen_after: self.position.to_fen(),
+            clock: None,
+            white_time,
+            black_time,
+        };
+        self.moves.push(game_move.clone());
+        self.check_game_end();
+        Ok(game_move)
+    }
+
+    fn rebuild_position_from_moves(&mut self) -> Result<(), String> {
+        self.position = XiangqiPosition::parse(&self.initial_fen)?;
+        self.position_history.clear();
+        let key = self.position.position_key();
+        self.position_history.insert(key, 1);
+        let moves = self.moves.clone();
+        self.moves.clear();
+        for mv in moves {
+            self.apply_move_no_clock(&mv.uci)?;
+        }
+        if let Some(ref mut clock) = self.clock {
+            clock.white_time = self
+                .config
+                .white_time_control
+                .as_ref()
+                .map(|tc| tc.initial_time);
+            clock.black_time = self
+                .config
+                .black_time_control
+                .as_ref()
+                .map(|tc| tc.initial_time);
+            if let Some(last_move) = self.moves.last() {
+                if last_move.white_time.is_some() || last_move.black_time.is_some() {
+                    clock.white_time = last_move.white_time;
+                    clock.black_time = last_move.black_time;
+                }
+            }
+            clock.last_tick = Instant::now();
+        }
+        Ok(())
+    }
+
+    fn check_game_end(&mut self) {
+        let legal = legal_xiangqi_moves(&self.position);
+        if legal.is_empty() {
+            self.status = if is_xiangqi_in_check(&self.position, self.position.turn) {
+                if self.position.turn == XiangqiColor::Red {
+                    GameStatus::Finished {
+                        result: GameResult::BlackWins {
+                            reason: GameEndReason::Checkmate,
+                        },
+                    }
+                } else {
+                    GameStatus::Finished {
+                        result: GameResult::WhiteWins {
+                            reason: GameEndReason::Checkmate,
+                        },
+                    }
+                }
+            } else {
+                GameStatus::Finished {
+                    result: GameResult::Draw {
+                        reason: DrawReason::Stalemate,
+                    },
+                }
+            };
+            return;
+        }
+
+        if self.position.halfmove >= 120 {
+            self.status = GameStatus::Finished {
+                result: GameResult::Draw {
+                    reason: DrawReason::FiftyMoveRule,
+                },
+            };
+            return;
+        }
+
+        if self
+            .position_history
+            .get(&self.position.position_key())
+            .copied()
+            .unwrap_or(0)
+            >= 3
+        {
+            self.status = GameStatus::Finished {
+                result: GameResult::Draw {
+                    reason: DrawReason::ThreefoldRepetition,
+                },
+            };
+        }
+    }
+
+    fn check_timeout(&self) -> Option<GameResult> {
+        let Some(clock) = &self.clock else {
+            return None;
+        };
+        let elapsed = clock.last_tick.elapsed().as_millis() as u64;
+        if self.position.turn == XiangqiColor::Red {
+            if clock.white_time.map(|wt| wt.saturating_sub(elapsed) == 0).unwrap_or(false) {
+                return Some(GameResult::BlackWins {
+                    reason: GameEndReason::Timeout,
+                });
+            }
+        } else if clock
+            .black_time
+            .map(|bt| bt.saturating_sub(elapsed) == 0)
+            .unwrap_or(false)
+        {
+            return Some(GameResult::WhiteWins {
+                reason: GameEndReason::Timeout,
+            });
+        }
+        None
+    }
+
+    fn get_current_times(&self) -> (Option<u64>, Option<u64>) {
+        if let Some(clock) = &self.clock {
+            let elapsed = clock.last_tick.elapsed().as_millis() as u64;
+            let white_time = if self.position.turn == XiangqiColor::Red {
+                clock.white_time.map(|time| time.saturating_sub(elapsed))
+            } else {
+                clock.white_time
+            };
+            let black_time = if self.position.turn == XiangqiColor::Black {
+                clock.black_time.map(|time| time.saturating_sub(elapsed))
+            } else {
+                clock.black_time
+            };
+            (white_time, black_time)
+        } else {
+            (None, None)
+        }
+    }
+
+    fn reset_clock(&mut self) {
+        if let Some(ref mut clock) = self.clock {
+            clock.last_tick = Instant::now();
+        }
+    }
+
+    fn end_game(&mut self, result: GameResult) {
+        self.status = GameStatus::Finished { result };
+        self.shutdown = true;
+        if let Some(pid) = self.white_engine_pid {
+            kill_process_by_pid(pid);
+        }
+        if let Some(pid) = self.black_engine_pid {
+            kill_process_by_pid(pid);
+        }
+    }
+}
+
+fn player_name(player: &XiangqiPlayerConfig) -> String {
+    match player {
+        XiangqiPlayerConfig::Human { name } => name.clone(),
+        XiangqiPlayerConfig::Engine { name, .. } => name.clone(),
+    }
+}
+
+fn emit_game_move_event(window: &Window, game_id: &str, controller: &XiangqiGameController) {
+    let (white_time, black_time) = controller.get_current_times();
+    let _ = window.emit(
+        "game-move-event",
+        GameMoveEvent {
+            game_id: game_id.to_string(),
+            moves: controller.moves.clone(),
+            fen: controller.position.to_fen(),
+            white_time,
+            black_time,
+        },
+    );
+}
+
+fn emit_game_over_event(
+    window: &Window,
+    game_id: &str,
+    result: GameResult,
+    moves: Vec<GameMove>,
+) {
+    let _ = window.emit(
+        "game-over-event",
+        GameOverEvent {
+            game_id: game_id.to_string(),
+            result,
+            moves,
+        },
+    );
+}
+
+fn maybe_start_xiangqi_engine(
+    window: &Window,
+    game_id: &str,
+    controller: &Arc<Mutex<XiangqiGameController>>,
+) {
+    let should_start = {
+        let mut ctrl = match controller.lock() {
+            Ok(ctrl) => ctrl,
+            Err(_) => return,
+        };
+        if !ctrl.shutdown
+            && ctrl.status == GameStatus::Playing
+            && ctrl.is_engine_turn()
+            && !ctrl.engine_thinking
+        {
+            ctrl.engine_thinking = true;
+            true
+        } else {
+            false
+        }
+    };
+
+    if !should_start {
+        return;
+    }
+
+    let window = window.clone();
+    let game_id = game_id.to_string();
+    let controller = controller.clone();
+    thread::spawn(move || {
+        let result = request_xiangqi_game_engine_move(&game_id, &controller, &window);
+        if result.is_err() {
+            let mut ctrl = match controller.lock() {
+                Ok(ctrl) => ctrl,
+                Err(_) => return,
+            };
+            ctrl.engine_thinking = false;
+            if ctrl.shutdown || ctrl.status != GameStatus::Playing {
+                return;
+            }
+            let result = if ctrl.position.turn == XiangqiColor::Red {
+                GameResult::BlackWins {
+                    reason: GameEndReason::Abandonment,
+                }
+            } else {
+                GameResult::WhiteWins {
+                    reason: GameEndReason::Abandonment,
+                }
+            };
+            ctrl.end_game(result.clone());
+            emit_game_over_event(&window, &game_id, result, ctrl.moves.clone());
+        }
+    });
+}
+
+fn request_xiangqi_game_engine_move(
+    game_id: &str,
+    controller: &Arc<Mutex<XiangqiGameController>>,
+    window: &Window,
+) -> Result<(), String> {
+    let (turn, initial_fen, moves, go_mode) = {
+        let ctrl = controller
+            .lock()
+            .map_err(|_| "game controller unavailable".to_string())?;
+        if ctrl.status != GameStatus::Playing {
+            return Ok(());
+        }
+        let turn = ctrl.position.turn;
+        let (white_time, black_time) = ctrl.get_current_times();
+        let go = match if turn == XiangqiColor::Red {
+            &ctrl.config.white
+        } else {
+            &ctrl.config.black
+        } {
+            XiangqiPlayerConfig::Engine { go, .. } => go.clone(),
+            _ => return Err("not engine turn".to_string()),
+        };
+        let current_time = if turn == XiangqiColor::Red {
+            white_time
+        } else {
+            black_time
+        };
+        let go_mode = if current_time.is_some() {
+            let (winc, binc) = ctrl
+                .clock
+                .as_ref()
+                .map(|clock| (clock.white_increment as u32, clock.black_increment as u32))
+                .unwrap_or((0, 0));
+            GoMode::PlayersTime(PlayersTime {
+                white: white_time.unwrap_or(u64::MAX).min(u32::MAX as u64) as u32,
+                black: black_time.unwrap_or(u64::MAX).min(u32::MAX as u64) as u32,
+                winc,
+                binc,
+            })
+        } else {
+            go.unwrap_or(GoMode::Depth(20))
+        };
+        let moves = ctrl.moves.iter().map(|mv| mv.uci.clone()).collect::<Vec<_>>();
+        (turn, ctrl.initial_fen.clone(), moves, go_mode)
+    };
+
+    let mut engine = {
+        let mut ctrl = controller
+            .lock()
+            .map_err(|_| "game controller unavailable".to_string())?;
+        if turn == XiangqiColor::Red {
+            ctrl.white_engine.take()
+        } else {
+            ctrl.black_engine.take()
+        }
+        .ok_or_else(|| "engine not initialized".to_string())?
+    };
+
+    send_engine_position(
+        &mut engine.runtime.stdin,
+        &engine.config.protocol,
+        &initial_fen,
+        &moves,
+        &mut engine.logs,
+    )?;
+    send_engine_go(&mut engine.runtime.stdin, &go_mode, &mut engine.logs)?;
+
+    let bestmove = loop {
+        let line = read_line(&mut engine.runtime, &mut engine.logs)?;
+        if let Some(bestmove) = parse_bestmove(&line) {
+            break bestmove;
+        }
+    };
+
+    let mut start_next_engine = false;
+    {
+        let mut ctrl = controller
+            .lock()
+            .map_err(|_| "game controller unavailable".to_string())?;
+        if turn == XiangqiColor::Red {
+            ctrl.white_engine = Some(engine);
+        } else {
+            ctrl.black_engine = Some(engine);
+        }
+        ctrl.engine_thinking = false;
+        if ctrl.shutdown || ctrl.status != GameStatus::Playing || ctrl.position.turn != turn {
+            return Ok(());
+        }
+        if bestmove.trim().is_empty() || bestmove == "0000" {
+            return Err("engine returned no legal move".to_string());
+        }
+        ctrl.apply_move(&bestmove)?;
+        emit_game_move_event(window, game_id, &ctrl);
+        if let GameStatus::Finished { result } = ctrl.status.clone() {
+            ctrl.shutdown = true;
+            emit_game_over_event(window, game_id, result, ctrl.moves.clone());
+        } else if ctrl.is_engine_turn() {
+            start_next_engine = true;
+        }
+    }
+
+    if start_next_engine {
+        maybe_start_xiangqi_engine(window, game_id, controller);
+    }
+
+    Ok(())
+}
+
+fn xiangqi_game_loop(game_id: GameId, controller: Arc<Mutex<XiangqiGameController>>, window: Window) {
+    maybe_start_xiangqi_engine(&window, &game_id, &controller);
+    loop {
+        thread::sleep(Duration::from_millis(100));
+        let mut start_engine = false;
+        {
+            let mut ctrl = match controller.lock() {
+                Ok(ctrl) => ctrl,
+                Err(_) => break,
+            };
+            if ctrl.shutdown {
+                break;
+            }
+            if ctrl.status != GameStatus::Playing {
+                break;
+            }
+            if let Some(result) = ctrl.check_timeout() {
+                ctrl.end_game(result.clone());
+                emit_game_over_event(&window, &game_id, result, ctrl.moves.clone());
+                break;
+            }
+            let (white_time, black_time) = ctrl.get_current_times();
+            let _ = window.emit(
+                "clock-update-event",
+                ClockUpdateEvent {
+                    game_id: game_id.clone(),
+                    white_time,
+                    black_time,
+                },
+            );
+            if ctrl.is_engine_turn() && !ctrl.engine_thinking {
+                start_engine = true;
+            }
+        }
+        if start_engine {
+            maybe_start_xiangqi_engine(&window, &game_id, &controller);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -484,8 +1802,265 @@ fn kill_engines(_tab: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn abort_game(_game_id: String) -> Result<(), String> {
+fn start_game(
+    window: Window,
+    state: tauri::State<AppState>,
+    game_id: String,
+    config: XiangqiGameConfig,
+) -> Result<GameState, String> {
+    abort_game(state.clone(), game_id.clone()).ok();
+
+    let mut controller = XiangqiGameController::new(game_id.clone(), config)?;
+
+    if let XiangqiPlayerConfig::Engine {
+        name,
+        path,
+        protocol,
+        options,
+        go,
+    } = controller.config.white.clone()
+    {
+        let engine = XiangqiGameEngine::new(name, path, protocol, options, go)?;
+        controller.white_engine_pid = Some(engine.runtime.child.id());
+        controller.white_engine = Some(engine);
+    }
+
+    if let XiangqiPlayerConfig::Engine {
+        name,
+        path,
+        protocol,
+        options,
+        go,
+    } = controller.config.black.clone()
+    {
+        let engine = XiangqiGameEngine::new(name, path, protocol, options, go)?;
+        controller.black_engine_pid = Some(engine.runtime.child.id());
+        controller.black_engine = Some(engine);
+    }
+
+    controller.reset_clock();
+    let game_state = controller.get_state();
+    let controller = Arc::new(Mutex::new(controller));
+    state
+        .xiangqi_games
+        .lock()
+        .map_err(|_| "game manager unavailable".to_string())?
+        .insert(game_id.clone(), controller.clone());
+
+    thread::spawn(move || xiangqi_game_loop(game_id, controller, window));
+
+    Ok(game_state)
+}
+
+#[tauri::command]
+fn get_game_state(state: tauri::State<AppState>, game_id: String) -> Result<GameState, String> {
+    let games = state
+        .xiangqi_games
+        .lock()
+        .map_err(|_| "game manager unavailable".to_string())?;
+    let controller = games
+        .get(&game_id)
+        .ok_or_else(|| format!("game not found: {}", game_id))?;
+    let controller = controller
+        .lock()
+        .map_err(|_| "game controller unavailable".to_string())?;
+    Ok(controller.get_state())
+}
+
+#[tauri::command]
+fn make_game_move(
+    window: Window,
+    state: tauri::State<AppState>,
+    game_id: String,
+    uci: String,
+) -> Result<GameState, String> {
+    let controller = {
+        let games = state
+            .xiangqi_games
+            .lock()
+            .map_err(|_| "game manager unavailable".to_string())?;
+        games
+            .get(&game_id)
+            .cloned()
+            .ok_or_else(|| format!("game not found: {}", game_id))?
+    };
+
+    let mut start_engine = false;
+    let state = {
+        let mut ctrl = controller
+            .lock()
+            .map_err(|_| "game controller unavailable".to_string())?;
+        if ctrl.is_engine_turn() {
+            return Err("not human turn".to_string());
+        }
+        ctrl.apply_move(&uci)?;
+        emit_game_move_event(&window, &game_id, &ctrl);
+        if let GameStatus::Finished { result } = ctrl.status.clone() {
+            ctrl.shutdown = true;
+            emit_game_over_event(&window, &game_id, result, ctrl.moves.clone());
+        } else if ctrl.is_engine_turn() {
+            start_engine = true;
+        }
+        ctrl.get_state()
+    };
+
+    if start_engine {
+        maybe_start_xiangqi_engine(&window, &game_id, &controller);
+    }
+
+    Ok(state)
+}
+
+#[tauri::command]
+fn take_back_game_move(
+    window: Window,
+    state: tauri::State<AppState>,
+    game_id: String,
+) -> Result<GameState, String> {
+    let controller = {
+        let games = state
+            .xiangqi_games
+            .lock()
+            .map_err(|_| "game manager unavailable".to_string())?;
+        games
+            .get(&game_id)
+            .cloned()
+            .ok_or_else(|| format!("game not found: {}", game_id))?
+    };
+
+    let mut start_engine = false;
+    let state = {
+        let mut ctrl = controller
+            .lock()
+            .map_err(|_| "game controller unavailable".to_string())?;
+        if ctrl.moves.is_empty() {
+            return Err("no moves found".to_string());
+        }
+        let human_color = match (&ctrl.config.white, &ctrl.config.black) {
+            (XiangqiPlayerConfig::Human { .. }, XiangqiPlayerConfig::Engine { .. }) => {
+                Some(XiangqiColor::Red)
+            }
+            (XiangqiPlayerConfig::Engine { .. }, XiangqiPlayerConfig::Human { .. }) => {
+                Some(XiangqiColor::Black)
+            }
+            _ => None,
+        };
+        let should_pop_two = human_color
+            .map(|color| ctrl.position.turn == color)
+            .unwrap_or(false);
+        ctrl.moves.pop();
+        if should_pop_two {
+            ctrl.moves.pop();
+        }
+        ctrl.status = GameStatus::Playing;
+        ctrl.shutdown = false;
+        ctrl.engine_thinking = false;
+        ctrl.rebuild_position_from_moves()?;
+        ctrl.check_game_end();
+        emit_game_move_event(&window, &game_id, &ctrl);
+        if let GameStatus::Finished { result } = ctrl.status.clone() {
+            ctrl.shutdown = true;
+            emit_game_over_event(&window, &game_id, result, ctrl.moves.clone());
+        } else if ctrl.is_engine_turn() {
+            start_engine = true;
+        }
+        ctrl.get_state()
+    };
+
+    if start_engine {
+        maybe_start_xiangqi_engine(&window, &game_id, &controller);
+    }
+
+    Ok(state)
+}
+
+#[tauri::command]
+fn resign_game(
+    window: Window,
+    state: tauri::State<AppState>,
+    game_id: String,
+    color: String,
+) -> Result<GameState, String> {
+    let controller = {
+        let games = state
+            .xiangqi_games
+            .lock()
+            .map_err(|_| "game manager unavailable".to_string())?;
+        games
+            .get(&game_id)
+            .cloned()
+            .ok_or_else(|| format!("game not found: {}", game_id))?
+    };
+    let mut ctrl = controller
+        .lock()
+        .map_err(|_| "game controller unavailable".to_string())?;
+    let result = match color.as_str() {
+        "white" | "red" => GameResult::BlackWins {
+            reason: GameEndReason::Resignation,
+        },
+        "black" => GameResult::WhiteWins {
+            reason: GameEndReason::Resignation,
+        },
+        _ => return Err(format!("invalid color: {}", color)),
+    };
+    ctrl.end_game(result.clone());
+    emit_game_over_event(&window, &game_id, result, ctrl.moves.clone());
+    Ok(ctrl.get_state())
+}
+
+#[tauri::command]
+fn abort_game(state: tauri::State<AppState>, game_id: String) -> Result<(), String> {
+    let controller = state
+        .xiangqi_games
+        .lock()
+        .map_err(|_| "game manager unavailable".to_string())?
+        .remove(&game_id);
+    if let Some(controller) = controller {
+        let mut ctrl = controller
+            .lock()
+            .map_err(|_| "game controller unavailable".to_string())?;
+        ctrl.shutdown = true;
+        if let Some(pid) = ctrl.white_engine_pid {
+            kill_process_by_pid(pid);
+        }
+        if let Some(pid) = ctrl.black_engine_pid {
+            kill_process_by_pid(pid);
+        }
+        if let Some(engine) = ctrl.white_engine.as_mut() {
+            engine.quit();
+        }
+        if let Some(engine) = ctrl.black_engine.as_mut() {
+            engine.quit();
+        }
+    }
     Ok(())
+}
+
+#[tauri::command]
+fn get_game_engine_logs(
+    state: tauri::State<AppState>,
+    game_id: String,
+    color: String,
+) -> Result<Vec<EngineLogEvent>, String> {
+    let games = state
+        .xiangqi_games
+        .lock()
+        .map_err(|_| "game manager unavailable".to_string())?;
+    let controller = games
+        .get(&game_id)
+        .ok_or_else(|| format!("game not found: {}", game_id))?;
+    let ctrl = controller
+        .lock()
+        .map_err(|_| "game controller unavailable".to_string())?;
+    let engine = match color.as_str() {
+        "white" | "red" => &ctrl.white_engine,
+        "black" => &ctrl.black_engine,
+        _ => return Err(format!("invalid color: {}", color)),
+    };
+    Ok(engine
+        .as_ref()
+        .map(|engine| engine.get_logs())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -589,7 +2164,13 @@ fn main() {
             write_db_game,
             preload_reference_db,
             kill_engines,
+            start_game,
+            get_game_state,
+            make_game_move,
+            take_back_game_move,
+            resign_game,
             abort_game,
+            get_game_engine_logs,
             get_engine_config,
             query_chessdb
         ])

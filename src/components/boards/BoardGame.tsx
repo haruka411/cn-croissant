@@ -10,6 +10,7 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import {
   IconArrowBackUp,
   IconArrowsExchange,
@@ -21,9 +22,11 @@ import { useAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { match } from "ts-pattern";
+import { commands, events, type GameConfig, type GameMove, type GameResult } from "@/bindings";
 import {
   currentGameStateAtom,
   currentGameStartFromCurrentAtom,
+  currentGameIdAtom,
   currentPlayersAtom,
   currentTabAtom,
   gameInputColorAtom,
@@ -32,6 +35,7 @@ import {
   gameSameTimeControlAtom,
 } from "@/state/atoms";
 import { useXiangqiStore } from "@/xiangqi/store";
+import { INITIAL_XIANGQI_FEN, parseUciMove, traverseMainline } from "@/xiangqi/xiangqi";
 import {
   resultReasonTranslationKey,
   type XiangqiResult,
@@ -52,23 +56,24 @@ function BoardGame() {
   const [gameState, setGameState] = useAtom(currentGameStateAtom);
   const [gameStartFromCurrent, setGameStartFromCurrent] = useAtom(currentGameStartFromCurrentAtom);
   const [players, setPlayers] = useAtom(currentPlayersAtom);
-  const [, setCurrentTab] = useAtom(currentTabAtom);
+  const [currentTab, setCurrentTab] = useAtom(currentTabAtom);
+  const [gameId, setGameId] = useAtom(currentGameIdAtom);
   const boardRef = useRef(null);
   const resetGame = useXiangqiStore((s) => s.reset);
+  const root = useXiangqiStore((s) => s.root);
+  const makeXiangqiMove = useXiangqiStore((s) => s.makeMove);
+  const goToEnd = useXiangqiStore((s) => s.goToEnd);
   const headers = useXiangqiStore((s) => s.headers);
   const setHeaders = useXiangqiStore((s) => s.setHeaders);
+  const setFen = useXiangqiStore((s) => s.setFen);
   const currentNode = useXiangqiStore((s) => s.currentNode());
   const currentPath = useXiangqiStore((s) => s.path);
-  const deleteMove = useXiangqiStore((s) => s.deleteMove);
-  const deleteMovesFrom = useXiangqiStore((s) => s.deleteMovesFrom);
   const dirty = useXiangqiStore((s) => s.dirty);
   const [error, setError] = useState<string | null>(null);
   const [clocks, setClocks] = useState<{ red: number | null; black: number | null }>({
     red: null,
     black: null,
   });
-  const lastClockTick = useRef<number | null>(null);
-  const timeoutHandled = useRef(false);
 
   const currentSide = useMemo<"red" | "black">(
     () => (currentNode.fen.split(/\s+/)[1] === "b" ? "black" : "red"),
@@ -90,7 +95,6 @@ function BoardGame() {
         resultReason: reason,
       });
       setGameState("gameOver");
-      lastClockTick.current = null;
     },
     [headers, setGameState, setHeaders],
   );
@@ -100,43 +104,6 @@ function BoardGame() {
       setGameState("gameOver");
     }
   }, [gameState, headers.result, setGameState]);
-
-  useEffect(() => {
-    if (gameState !== "playing") {
-      lastClockTick.current = null;
-      return;
-    }
-
-    const activeTimeControl =
-      currentSide === "red" ? players.white?.timeControl : players.black?.timeControl;
-    lastClockTick.current = Date.now();
-    if (!activeTimeControl) return;
-
-    const timer = window.setInterval(() => {
-      const now = Date.now();
-      const elapsed = now - (lastClockTick.current ?? now);
-      lastClockTick.current = now;
-
-      setClocks((prev) => {
-        const remaining = prev[currentSide];
-        if (remaining === null) return prev;
-
-        const nextRemaining = Math.max(0, remaining - elapsed);
-        if (nextRemaining === 0 && remaining > 0 && !timeoutHandled.current) {
-          timeoutHandled.current = true;
-          window.setTimeout(() => {
-            finishGame(currentSide === "red" ? "0-1" : "1-0", "timeout");
-          }, 0);
-        }
-        return {
-          ...prev,
-          [currentSide]: nextRemaining,
-        };
-      });
-    }, 250);
-
-    return () => window.clearInterval(timer);
-  }, [currentSide, finishGame, gameState, players.black?.timeControl, players.white?.timeControl]);
 
   function cycleColor() {
     setInputColor((prev) =>
@@ -160,25 +127,84 @@ function BoardGame() {
     };
   }
 
-  const handleMove = useCallback(
-    (_uci: string, side: "red" | "black") => {
-      const timeControl = side === "red" ? players.white?.timeControl : players.black?.timeControl;
-      if (timeControl?.increment) {
-        setClocks((prev) =>
-          prev[side] === null
-            ? prev
-            : {
-                ...prev,
-                [side]: (prev[side] ?? 0) + (timeControl.increment ?? 0),
-              },
-        );
+  const syncTreeWithMoves = useCallback(
+    (backendMoves: GameMove[], initialFen?: string) => {
+      if (initialFen && root.fen !== initialFen) {
+        setFen(initialFen);
       }
-      lastClockTick.current = Date.now();
+      const localMoves = traverseMainline(root)
+        .slice(1)
+        .map((node) => node.move)
+        .filter((move): move is string => Boolean(move));
+      if (
+        localMoves.length === backendMoves.length &&
+        localMoves.every((move, index) => move === backendMoves[index].uci)
+      ) {
+        goToEnd();
+        return;
+      }
+      setFen(initialFen ?? root.fen);
+      for (const move of backendMoves) {
+        const parsed = parseUciMove(move.uci);
+        if (parsed) {
+          makeXiangqiMove(parsed, { mainline: true });
+        }
+      }
+      goToEnd();
     },
-    [players.black?.timeControl, players.white?.timeControl],
+    [goToEnd, makeXiangqiMove, root, setFen],
   );
 
-  function startGame() {
+  const handleMove = useCallback(
+    (uci: string) => {
+      if (!gameId || gameState !== "playing") return;
+      commands.makeGameMove(gameId, uci).then((result) => {
+        if (result.status === "error") {
+          notifications.show({
+            color: "red",
+            title: t("Common.Error"),
+            message: result.error,
+          });
+        }
+      });
+    },
+    [gameId, gameState, t],
+  );
+
+  useEffect(() => {
+    if (gameState !== "playing" || !gameId) return;
+
+    const currentGameId = gameId;
+    const unlistenMove = events.gameMoveEvent.listen(({ payload }) => {
+      if (payload.gameId !== currentGameId) return;
+      setClocks({
+        red: payload.whiteTime !== null ? Number(payload.whiteTime) : null,
+        black: payload.blackTime !== null ? Number(payload.blackTime) : null,
+      });
+      syncTreeWithMoves(payload.moves);
+    });
+    const unlistenClock = events.clockUpdateEvent.listen(({ payload }) => {
+      if (payload.gameId !== currentGameId) return;
+      setClocks({
+        red: payload.whiteTime !== null ? Number(payload.whiteTime) : null,
+        black: payload.blackTime !== null ? Number(payload.blackTime) : null,
+      });
+    });
+    const unlistenGameOver = events.gameOverEvent.listen(({ payload }) => {
+      if (payload.gameId !== currentGameId) return;
+      syncTreeWithMoves(payload.moves);
+      const outcome = gameResultToOutcome(payload.result);
+      finishGame(outcome.result, outcome.reason);
+    });
+
+    return () => {
+      unlistenMove.then((fn) => fn());
+      unlistenClock.then((fn) => fn());
+      unlistenGameOver.then((fn) => fn());
+    };
+  }, [finishGame, gameId, gameState, syncTreeWithMoves]);
+
+  async function startGame() {
     const nextPlayers = getPlayers();
     const missingEngine = [nextPlayers.white, nextPlayers.black].some(
       (player) => player.type === "engine" && !player.engine,
@@ -188,65 +214,96 @@ function BoardGame() {
       return;
     }
 
+    const startFen = gameStartFromCurrent ? root.fen : INITIAL_XIANGQI_FEN;
     if (!gameStartFromCurrent) {
       resetGame();
     }
-    setPlayers({
-      white: nextPlayers.white,
-      black: nextPlayers.black,
-    });
-    setClocks({
-      red: nextPlayers.white.timeControl?.seconds ?? null,
-      black: nextPlayers.black.timeControl?.seconds ?? null,
-    });
-    timeoutHandled.current = false;
-    lastClockTick.current = Date.now();
-    setHeaders({
+    const nextHeaders = {
       ...headers,
       red: displayName(nextPlayers.white, redLabel),
       black: displayName(nextPlayers.black, blackLabel),
-      result: "*",
+      result: "*" as XiangqiResult,
       resultReason: null,
       orientation: nextPlayers.orientation,
-    });
-    setGameState("playing");
-    setGameStartFromCurrent(false);
-    setError(null);
+    };
+    const newGameId = `${currentTab?.value ?? "xiangqi"}-game`;
+    const initialFen = gameStartFromCurrent ? startFen : null;
+    try {
+      const config = {
+        white: toPlayerConfig(nextPlayers.white, redLabel),
+        black: toPlayerConfig(nextPlayers.black, blackLabel),
+        whiteTimeControl: nextPlayers.white.timeControl
+          ? {
+              initialTime: nextPlayers.white.timeControl.seconds,
+              increment: nextPlayers.white.timeControl.increment ?? 0,
+            }
+          : null,
+        blackTimeControl: nextPlayers.black.timeControl
+          ? {
+              initialTime: nextPlayers.black.timeControl.seconds,
+              increment: nextPlayers.black.timeControl.increment ?? 0,
+            }
+          : null,
+        initialFen,
+        initialMoves: [],
+        openingBook: null,
+      } as GameConfig;
+
+      const result = await commands.startGame(newGameId, config);
+      if (result.status === "error") {
+        setError(result.error);
+        return;
+      }
+      const state = result.data;
+      setPlayers({
+        white: nextPlayers.white,
+        black: nextPlayers.black,
+      });
+      setGameId(newGameId);
+      setClocks({
+        red: state.whiteTime !== null ? Number(state.whiteTime) : null,
+        black: state.blackTime !== null ? Number(state.blackTime) : null,
+      });
+      setHeaders(nextHeaders);
+      if (!gameStartFromCurrent) {
+        syncTreeWithMoves(state.moves, startFen);
+      }
+      setGameState("playing");
+      setGameStartFromCurrent(false);
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+    }
   }
 
-  function newGame() {
+  async function newGame() {
+    if (gameId) {
+      await commands.abortGame(gameId);
+      setGameId(null);
+    }
     resetGame();
     setGameState("settingUp");
     setGameStartFromCurrent(false);
     setClocks({ red: null, black: null });
-    timeoutHandled.current = false;
-    lastClockTick.current = null;
     setError(null);
   }
 
   function resign() {
-    finishGame(currentSide === "red" ? "0-1" : "1-0", "resignation");
+    if (!gameId) return;
+    const color = currentSide === "red" ? "white" : "black";
+    commands.resignGame(gameId, color);
   }
 
   function undoMove() {
-    const undoPath = findUndoPath(currentPath, players);
-    if (undoPath.length === 0) return;
-    if (hasEngine) {
-      deleteMovesFrom(undoPath);
-    } else {
-      deleteMove(undoPath);
-    }
-    setHeaders({
-      ...headers,
-      result: "*",
-      resultReason: null,
-    });
-    setGameState("playing");
-    timeoutHandled.current = false;
-    lastClockTick.current = Date.now();
+    if (!gameId) return;
+    commands.takeBackGameMove(gameId);
   }
 
   function changeToAnalysisMode() {
+    if (gameId) {
+      commands.abortGame(gameId);
+      setGameId(null);
+    }
     setCurrentTab((tab) => ({ ...tab, type: "analysis" }));
     setGameState("settingUp");
   }
@@ -447,6 +504,55 @@ function displayName(player: OpponentSettings, fallback: string) {
     return player.engine?.name || fallback;
   }
   return player.name || fallback;
+}
+
+function toPlayerConfig(player: OpponentSettings, fallback: string) {
+  if (player.type === "human") {
+    return {
+      type: "human" as const,
+      name: player.name || fallback,
+    };
+  }
+
+  const engineSettings = player.engineSettings || player.engine?.settings || [];
+  return {
+    type: "engine" as const,
+    name: player.engine?.name || fallback,
+    path: player.engine?.path || "",
+    protocol: player.engine?.protocol ?? "ucci",
+    options: engineSettings
+      .filter((setting) => setting.value !== null && setting.value !== undefined)
+      .map((setting) => ({
+        name: setting.name,
+        value: String(setting.value),
+      })),
+    go: player.timeControl ? null : player.go,
+  };
+}
+
+function gameResultToOutcome(result: GameResult): {
+  result: XiangqiResult;
+  reason: XiangqiResultReason;
+} {
+  if (result.type === "whiteWins") {
+    return { result: "1-0", reason: gameEndReasonToXiangqiReason(result.reason) };
+  }
+  if (result.type === "blackWins") {
+    return { result: "0-1", reason: gameEndReasonToXiangqiReason(result.reason) };
+  }
+  return { result: "1/2-1/2", reason: drawReasonToXiangqiReason(result.reason) };
+}
+
+function gameEndReasonToXiangqiReason(reason: GameResult["reason"]): XiangqiResultReason {
+  if (reason === "timeout") return "timeout";
+  if (reason === "resignation") return "resignation";
+  return "checkmate";
+}
+
+function drawReasonToXiangqiReason(reason: Extract<GameResult, { type: "draw" }>["reason"]) {
+  if (reason === "threefoldRepetition") return "repetition";
+  if (reason === "fiftyMoveRule") return "naturalDraw";
+  return "noLegalMove";
 }
 
 function findUndoPath(

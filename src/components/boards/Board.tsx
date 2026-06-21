@@ -1,11 +1,9 @@
 import { Box, Center, Group, Text } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { invoke } from "@tauri-apps/api/core";
 import type { Piece } from "chessops";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
-import type { GoMode } from "@/bindings";
 import type { ChessgroundRef } from "@/chessground/Chessground";
 import {
   boardImageAtom,
@@ -31,7 +29,6 @@ import {
 import { keyMapAtom } from "@/state/keybinds";
 import { useAtomValue } from "jotai";
 import classes from "@/styles/Chessboard.module.css";
-import type { EngineSettings, LocalEngine } from "@/utils/engines";
 import { BoardBar } from "./BoardBar";
 import {
   applyMove,
@@ -42,7 +39,7 @@ import {
   type XiangqiMove,
 } from "@/xiangqi/xiangqi";
 import { parseXiangqiEvaluation, scoreToEvalFill } from "@/xiangqi/evaluation";
-import { useXiangqiStore, useXiangqiStoreApi } from "@/xiangqi/store";
+import { useXiangqiStore } from "@/xiangqi/store";
 import { useCustomXiangqiPieces } from "@/xiangqi/customPieceTheme";
 import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
 import { playSound } from "@/utils/sound";
@@ -67,16 +64,12 @@ interface ChessboardProps {
 
 function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }: ChessboardProps) {
   const { t } = useTranslation();
-  const xiangqiStore = useXiangqiStoreApi();
   const headers = useXiangqiStore((s) => s.headers);
   const setHeaders = useXiangqiStore((s) => s.setHeaders);
   const currentNode = useXiangqiStore((s) => s.currentNode());
   const makeXiangqiMove = useXiangqiStore((s) => s.makeMove);
   const setCurrentNodeShapes = useXiangqiStore((s) => s.setShapes);
   const [selected, setSelected] = useState<Square | null>(null);
-  const [engineThinking, setEngineThinking] = useState(false);
-  const engineRequestInFlight = useRef<string | null>(null);
-  const lastEngineRequest = useRef<string | null>(null);
   const position = useMemo(() => parseFen(currentNode.fen), [currentNode.fen]);
   const lastMove = currentNode.move ? parseUciMove(currentNode.move) : null;
   const boardTheme = useAtomValue(boardImageAtom);
@@ -101,12 +94,6 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const engineEvaluation = useAtomValue(xiangqiEvaluationAtom);
   const clearDrawingsSignal = useAtomValue(xiangqiClearDrawingsSignalAtom);
   const previousClearDrawingsSignal = useRef(clearDrawingsSignal);
-  const clockRef = useRef<XiangqiClockSnapshot>({
-    red: whiteTime,
-    black: blackTime,
-    redIncrement: players.white?.timeControl?.increment ?? 0,
-    blackIncrement: players.black?.timeControl?.increment ?? 0,
-  });
   const [displayedEngineEval, setDisplayedEngineEval] = useState<{
     redCentipawns: number;
     label: string;
@@ -178,20 +165,6 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     clearCurrentNodeShapes();
   }, [clearDrawingsSignal, clearCurrentNodeShapes]);
 
-  useEffect(() => {
-    clockRef.current = {
-      red: whiteTime,
-      black: blackTime,
-      redIncrement: players.white?.timeControl?.increment ?? 0,
-      blackIncrement: players.black?.timeControl?.increment ?? 0,
-    };
-  }, [
-    blackTime,
-    players.black?.timeControl?.increment,
-    players.white?.timeControl?.increment,
-    whiteTime,
-  ]);
-
   function makeMove(move: XiangqiMove) {
     if (viewOnly && !editingMode) return;
 
@@ -199,6 +172,12 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     try {
       result = applyMove(position, move);
     } catch {
+      return;
+    }
+
+    if (currentTab?.type === "play" && gameState === "playing") {
+      setSelected(null);
+      onMove?.(`${move.from}${move.to}`, position.turn);
       return;
     }
 
@@ -218,69 +197,6 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
           ? players.black
           : null
       : null;
-
-  const engine = enginePlayer?.engine;
-
-  useEffect(() => {
-    if (!engine || engineRequestInFlight.current || editingMode || viewOnly) return;
-
-    let canceled = false;
-    const requestedFen = currentNode.fen;
-    const requestKey = `${engine.id}:${currentNode.id}:${requestedFen}`;
-    if (lastEngineRequest.current === requestKey) return;
-    lastEngineRequest.current = requestKey;
-    engineRequestInFlight.current = requestKey;
-    setSelected(null);
-    setEngineThinking(true);
-
-    void requestXiangqiBestMove(
-      engine,
-      currentNode.fen,
-      resolveXiangqiGameGoMode(enginePlayer.go, enginePlayer.timeControl ? clockRef.current : null),
-      enginePlayer.engineSettings,
-    )
-      .then((bestMove) => {
-        if (canceled) return;
-        if (engineRequestInFlight.current !== requestKey) return;
-        if (!bestMove) return;
-        const parsed = parseUciMove(bestMove);
-        if (!parsed) return;
-        if (xiangqiStore.getState().currentNode().fen !== requestedFen) return;
-        let result;
-        try {
-          result = applyMove(parseFen(requestedFen), parsed);
-        } catch {
-          return;
-        }
-        xiangqiStore.getState().makeMove(parsed);
-        playSound(result.captured !== null, result.check);
-        onMove?.(bestMove, result.position.turn === "red" ? "black" : "red");
-      })
-      .finally(() => {
-        if (engineRequestInFlight.current === requestKey) {
-          engineRequestInFlight.current = null;
-          setEngineThinking(false);
-        }
-      });
-
-    return () => {
-      canceled = true;
-      if (engineRequestInFlight.current === requestKey) {
-        engineRequestInFlight.current = null;
-        setEngineThinking(false);
-      }
-    };
-  }, [
-    currentNode.fen,
-    currentNode.id,
-    currentTab?.type,
-    editingMode,
-    engine,
-    enginePlayer,
-    onMove,
-    xiangqiStore,
-    viewOnly,
-  ]);
 
   const engineEval = useMemo(
     () =>
@@ -350,7 +266,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
               </Text>
             )}
             <Text size="xs" c="dimmed">
-              {engineThinking
+              {enginePlayer
                 ? t("Board.Xiangqi.EngineThinking")
                 : position.turn === "red"
                   ? t("Board.Xiangqi.RedToMove")
@@ -460,7 +376,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
                 snapDrawings={snapArrows}
                 drawingsEnabled={!editingMode}
                 onShapesChange={setCurrentNodeShapes}
-                onSelect={enginePlayer || engineThinking ? () => {} : setSelected}
+                onSelect={enginePlayer ? () => {} : setSelected}
                 onMove={makeMove}
               />
             </div>
@@ -491,80 +407,6 @@ function formatClock(milliseconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
-type EngineAnalysis = {
-  bestmove: string;
-};
-
-type XiangqiClockSnapshot = {
-  red?: number;
-  black?: number;
-  redIncrement: number;
-  blackIncrement: number;
-};
-
-async function requestXiangqiBestMove(
-  engine: LocalEngine,
-  fen: string,
-  goMode: GoMode,
-  settings: EngineSettings | undefined,
-): Promise<string | null> {
-  const engineSettings = settings ?? engine.settings ?? [];
-  const result = await invoke<EngineAnalysis>("analyze_position", {
-    request: {
-      engine: {
-        id: engine.id,
-        name: engine.name,
-        path: engine.path,
-        protocol: engine.protocol ?? "uci",
-        threads: Number(engineSettings.find((setting) => setting.name === "Threads")?.value) || 1,
-        hash: Number(engineSettings.find((setting) => setting.name === "Hash")?.value) || 64,
-        moveTimeMs: null,
-      },
-      fen,
-      moves: [],
-      depth: goMode.t === "Depth" ? Math.max(1, Math.min(goMode.c, 20)) : 8,
-      multipv: 1,
-      extraOptions: engineSettings
-        .filter((setting) => !["Threads", "Hash", "MultiPV"].includes(setting.name))
-        .filter((setting) => setting.value !== null && setting.value !== undefined)
-        .map((setting) => ({
-          name: setting.name,
-          value: String(setting.value),
-        })),
-      goMode,
-    },
-  });
-
-  if (!result.bestmove || result.bestmove === "0000") return null;
-  return result.bestmove;
-}
-
-function resolveXiangqiGameGoMode(goMode: GoMode | undefined, clock: XiangqiClockSnapshot | null) {
-  if (clock) {
-    return {
-      t: "PlayersTime",
-      c: {
-        white: toUciClockValue(clock.red),
-        black: toUciClockValue(clock.black),
-        winc: toUciClockValue(clock.redIncrement),
-        binc: toUciClockValue(clock.blackIncrement),
-      },
-    } satisfies GoMode;
-  }
-
-  if (!goMode || goMode.t === "Infinite" || goMode.t === "PlayersTime") {
-    return { t: "Depth", c: 8 } satisfies GoMode;
-  }
-
-  return goMode;
-}
-
-function toUciClockValue(value: number | undefined) {
-  const MAX_UCI_TIME = 2_147_483_647;
-  if (value === undefined || !Number.isFinite(value)) return MAX_UCI_TIME;
-  return Math.max(1, Math.min(Math.round(value), MAX_UCI_TIME));
 }
 
 export default memo(Board);
