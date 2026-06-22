@@ -7,6 +7,10 @@ import { useTranslation } from "react-i18next";
 import type { ChessgroundRef } from "@/chessground/Chessground";
 import {
   boardImageAtom,
+  customBoardCalibrationAtom,
+  customBoardImageAtom,
+  customPieceDirectoryAtom,
+  customPieceScaleAtom,
   customPieceThemeConfirmedAtom,
   currentGameStateAtom,
   currentPlayersAtom,
@@ -15,6 +19,7 @@ import {
   moveHighlightAtom,
   moveMethodAtom,
   pieceSetAtom,
+  showCoordinatesAtom,
   showDestsAtom,
   showVariationArrowsAtom,
   snapArrowsAtom,
@@ -41,6 +46,7 @@ import {
 import { parseXiangqiEvaluation, scoreToEvalFill } from "@/xiangqi/evaluation";
 import { useXiangqiStore } from "@/xiangqi/store";
 import { useCustomXiangqiPieces } from "@/xiangqi/customPieceTheme";
+import { customBoardImageUrl as getCustomBoardImageUrl } from "@/xiangqi/customBoardTheme";
 import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
 import { playSound } from "@/utils/sound";
 
@@ -73,15 +79,23 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   const position = useMemo(() => parseFen(currentNode.fen), [currentNode.fen]);
   const lastMove = currentNode.move ? parseUciMove(currentNode.move) : null;
   const boardTheme = useAtomValue(boardImageAtom);
+  const customBoardCalibration = useAtomValue(customBoardCalibrationAtom);
+  const customBoardImage = useAtomValue(customBoardImageAtom);
   const pieceStyle = useAtomValue(pieceSetAtom);
+  const customPieceDirectory = useAtomValue(customPieceDirectoryAtom);
+  const customPieceScale = useAtomValue(customPieceScaleAtom);
   const customPieceThemeConfirmed = useAtomValue(customPieceThemeConfirmedAtom);
   const pieceTextScale = useAtomValue(xiangqiPieceTextScaleAtom);
   const pieceInnerScale = useAtomValue(xiangqiPieceInnerScaleAtom);
   const pieceInnerRingVisible = useAtomValue(xiangqiPieceInnerRingVisibleAtom);
-  const customPieceTheme = useCustomXiangqiPieces(pieceStyle === "custom-svg");
+  const customPieceTheme = useCustomXiangqiPieces(
+    pieceStyle === "custom-svg",
+    customPieceDirectory || undefined,
+  );
   const customPieceWarningShownRef = useRef(false);
   const showDests = useAtomValue(showDestsAtom);
   const showLastMove = useAtomValue(moveHighlightAtom);
+  const showCoordinates = useAtomValue(showCoordinatesAtom);
   const moveMethod = useAtomValue(moveMethodAtom);
   const gameState = useAtomValue(currentGameStateAtom);
   const players = useAtomValue(currentPlayersAtom);
@@ -100,6 +114,13 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
   } | null>(null);
 
   const orientation = headers.orientation === "black" ? "black" : "red";
+  const customBoardUrl =
+    boardTheme === "custom-png" && customBoardImage
+      ? getCustomBoardImageUrl(customBoardImage)
+      : undefined;
+  const resolvedBoardTheme =
+    boardTheme === "custom-png" && !customBoardUrl ? "classic" : boardTheme;
+  const boardAspectRatio = resolvedBoardTheme === "custom-png" ? "767 / 842" : "9 / 10";
   const redLabel = t("Board.Xiangqi.Red");
   const blackLabel = t("Board.Xiangqi.Black");
   const topPlayer = orientation === "red" ? headers.black || blackLabel : headers.red || redLabel;
@@ -336,7 +357,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
             className={classes.chessboard}
             ref={boardRef}
             style={{
-              aspectRatio: "9 / 10",
+              aspectRatio: boardAspectRatio,
               flex: "0 1 auto",
               height: "100%",
               maxHeight: "100%",
@@ -356,7 +377,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
                 selected={selected}
                 lastMove={lastMove}
                 orientation={orientation}
-                boardTheme={boardTheme}
+                boardTheme={resolvedBoardTheme}
                 pieceStyle={
                   useCustomPieces
                     ? "custom-svg"
@@ -367,9 +388,13 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
                 pieceTextScale={pieceTextScale}
                 pieceInnerScale={pieceInnerScale}
                 pieceInnerRingVisible={pieceInnerRingVisible[pieceStyle] ?? true}
+                customBoardImageUrl={customBoardUrl}
+                customBoardCalibration={customBoardCalibration}
                 customPieceUrls={useCustomPieces ? customPieceTheme.urls : undefined}
+                customPieceScale={customPieceScale}
                 showDests={showDests}
                 showLastMove={showLastMove}
+                coordinates={showCoordinates}
                 moveMethod={moveMethod}
                 shapes={drawnShapes}
                 autoShapes={[...cloudArrows, ...analysisShapes, ...variationShapes]}

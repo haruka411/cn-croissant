@@ -284,9 +284,7 @@ struct XiangqiPosition {
 #[derive(Debug, Clone)]
 struct XiangqiMoveResult {
     position: XiangqiPosition,
-    captured: Option<XiangqiPiece>,
     san: String,
-    check: bool,
 }
 
 #[derive(Debug)]
@@ -765,14 +763,11 @@ fn apply_xiangqi_move_unchecked(
     } else {
         position.fullmove
     };
-    let check = is_xiangqi_in_check(&next, next.turn);
     let san = make_xiangqi_uci_move(mv);
 
     Ok(XiangqiMoveResult {
         position: next,
-        captured,
         san,
-        check,
     })
 }
 

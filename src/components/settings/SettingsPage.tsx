@@ -42,6 +42,7 @@ import {
   previewBoardOnHoverAtom,
   showArrowsAtom,
   showConsecutiveArrowsAtom,
+  showCoordinatesAtom,
   showDestsAtom,
   showVariationArrowsAtom,
   snapArrowsAtom,
@@ -134,6 +135,7 @@ export default function Page() {
   enginesDirectory = enginesDirectory || defaultEnginesDir;
 
   const [moveMethod, setMoveMethod] = useAtom(moveMethodAtom);
+  const [showCoordinates, setShowCoordinates] = useAtom(showCoordinatesAtom);
   const [materialDisplay, setMaterialDisplay] = useAtom(materialDisplayAtom);
   const [practiceAutoDifficulty, setPracticeAutoDifficulty] = useAtom(practiceAutoDifficultyAtom);
 
@@ -154,6 +156,25 @@ export default function Page() {
         description: t("Settings.MoveHighlight.Desc"),
         keywords: ["highlight", "last move"],
         render: () => <SettingsSwitch atom={moveHighlightAtom} />,
+      },
+      {
+        id: "coordinates",
+        category: "board",
+        title: t("Settings.Coordinates"),
+        description: t("Settings.Coordinates.Desc"),
+        keywords: ["coordinates", "files", "ranks", "xiangqi"],
+        render: () => (
+          <Select
+            data={[
+              { label: t("Settings.Coordinates.No"), value: "no" },
+              { label: t("Settings.Coordinates.Edge"), value: "edge" },
+              { label: t("Settings.Coordinates.All"), value: "all" },
+            ]}
+            allowDeselect={false}
+            value={showCoordinates}
+            onChange={(val) => setShowCoordinates((val ?? "no") as "no" | "edge" | "all")}
+          />
+        ),
       },
       {
         id: "arrows",
@@ -334,8 +355,8 @@ export default function Page() {
         category: "appearance",
         title: isChinese ? "棋子样式" : "Xiangqi Pieces",
         description: isChinese
-          ? "选择中国象棋棋子的显示样式；选择“自定义 SVG”后可打开固定文件夹放置 SVG"
-          : "Choose the Xiangqi piece style; choose Custom SVG to open the fixed SVG folder",
+          ? "选择中国象棋棋子的显示样式；选择“自定义 SVG”后可指定 SVG 文件夹"
+          : "Choose the Xiangqi piece style; choose Custom SVG to set an SVG folder",
         keywords: ["piece", "xiangqi", "style", "svg", "custom"],
         render: () => <PiecesSelect />,
       },
@@ -343,8 +364,10 @@ export default function Page() {
         id: "board-image",
         category: "appearance",
         title: isChinese ? "棋盘主题" : "Xiangqi Board",
-        description: isChinese ? "选择中国象棋棋盘主题" : "Choose the Xiangqi board theme",
-        keywords: ["board", "xiangqi", "theme"],
+        description: isChinese
+          ? "选择中国象棋棋盘主题，或使用自定义 PNG 棋盘文件夹"
+          : "Choose the Xiangqi board theme or use a custom PNG board folder",
+        keywords: ["board", "xiangqi", "theme", "png", "custom", "folder"],
         render: () => <BoardSelect />,
       },
       {
@@ -461,12 +484,14 @@ export default function Page() {
       i18n,
       isChinese,
       moveMethod,
+      showCoordinates,
       isNative,
       materialDisplay,
       filesDirectory,
       databasesDirectory,
       enginesDirectory,
       setMoveMethod,
+      setShowCoordinates,
       setIsNative,
       setFilesDirectory,
       setDatabasesDirectory,

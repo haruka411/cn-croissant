@@ -12,7 +12,7 @@
 import { Notifications } from "@mantine/notifications";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { listen } from "@tauri-apps/api/event";
-import { attachConsole, info, warn } from "@tauri-apps/plugin-log";
+import { attachConsole, info } from "@tauri-apps/plugin-log";
 import { getDefaultStore, useAtomValue, useSetAtom } from "jotai";
 import { ContextMenuProvider } from "mantine-contextmenu";
 import { useEffect, useRef } from "react";
@@ -20,7 +20,6 @@ import { DndProvider } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import {
   databaseConversionStateAtom,
-  enginesAtom,
   appFontFamilyAtom,
   type AppFontFamily,
   fontSizeAtom,
@@ -52,7 +51,6 @@ const colorSchemeManager = localStorageColorSchemeManager({
 });
 
 import ErrorComponent from "@/components/ErrorComponent";
-import { upsertBuiltinPikafish } from "@/utils/builtinEngine";
 import { getDatabasesDir, getDocumentDir, getEnginesDir } from "@/utils/directories";
 import { initUserAgent } from "@/utils/http";
 import { routeTree } from "./routeTree.gen";
@@ -135,14 +133,6 @@ function useAppStartup() {
       info("React app started successfully");
 
       const store = getDefaultStore();
-      store.set(enginesAtom, async (prev) => {
-        try {
-          return await upsertBuiltinPikafish(await prev);
-        } catch (e) {
-          warn(`Failed to initialize bundled Pikafish: ${e}`);
-          return (await prev).filter((engine) => engine.type === "local");
-        }
-      });
 
       await preloadReferenceDb(store);
 

@@ -1,5 +1,6 @@
 import clsx from "clsx";
 import {
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -11,6 +12,7 @@ import {
   PIECE_LABELS,
   square,
   type Square,
+  type XiangqiColor,
   type XiangqiDrawBrush,
   type XiangqiDrawShape,
   type XiangqiPiece,
@@ -19,6 +21,15 @@ import {
 } from "./xiangqi";
 import classes from "./XiangqiBoard.module.css";
 import { customPieceKey, type CustomPieceUrls } from "./customPieceTheme";
+import {
+  CUSTOM_BOARD_REFERENCE_CELL_SIZE,
+  CUSTOM_BOARD_REFERENCE_HEIGHT,
+  CUSTOM_BOARD_REFERENCE_ORIGIN_X,
+  CUSTOM_BOARD_REFERENCE_ORIGIN_Y,
+  CUSTOM_BOARD_REFERENCE_WIDTH,
+  DEFAULT_CUSTOM_BOARD_CALIBRATION,
+  type CustomBoardCalibration,
+} from "./customBoardTheme";
 import {
   XIANGQI_PIECE_INNER_SCALE_MAX,
   XIANGQI_PIECE_INNER_SCALE_MIN,
@@ -36,7 +47,8 @@ export type BoardTheme =
   | "walnut"
   | "porcelain"
   | "slate"
-  | "crystal";
+  | "crystal"
+  | "custom-png";
 export type PieceStyle =
   | "classic"
   | "seal"
@@ -51,13 +63,38 @@ export type PieceStyle =
   | "crystal"
   | "custom-svg";
 export type MoveMethod = "drag" | "select" | "both";
+export type CoordinateDisplay = "no" | "edge" | "all";
 
-const GRID_PAD_X = 8;
-const GRID_PAD_Y = 7;
-const GRID_WIDTH = 84;
-const GRID_HEIGHT = 86;
+const BUILTIN_GRID_PAD_X = 8;
+const BUILTIN_GRID_PAD_Y = 7;
+const BUILTIN_GRID_WIDTH = 84;
+const BUILTIN_GRID_HEIGHT = 86;
 const SVG_WIDTH = 800;
 const SVG_HEIGHT = 900;
+const XIANGQI_FILES = Array.from({ length: 9 }, (_, index) => index);
+const XIANGQI_RANKS = Array.from({ length: 10 }, (_, index) => index);
+const RED_FILE_LABELS = ["九", "八", "七", "六", "五", "四", "三", "二", "一"];
+const BLACK_FILE_LABELS = ["１", "２", "３", "４", "５", "６", "７", "８", "９"];
+
+type BoardLayout = {
+  padX: number;
+  padY: number;
+  width: number;
+  height: number;
+};
+
+const BUILTIN_BOARD_LAYOUT: BoardLayout = {
+  padX: BUILTIN_GRID_PAD_X,
+  padY: BUILTIN_GRID_PAD_Y,
+  width: BUILTIN_GRID_WIDTH,
+  height: BUILTIN_GRID_HEIGHT,
+};
+const CUSTOM_PNG_BOARD_LAYOUT: BoardLayout = {
+  padX: 50 - (4 * CUSTOM_BOARD_REFERENCE_CELL_SIZE * 100) / CUSTOM_BOARD_REFERENCE_WIDTH,
+  padY: 50 - (4.5 * CUSTOM_BOARD_REFERENCE_CELL_SIZE * 100) / CUSTOM_BOARD_REFERENCE_HEIGHT,
+  width: (8 * CUSTOM_BOARD_REFERENCE_CELL_SIZE * 100) / CUSTOM_BOARD_REFERENCE_WIDTH,
+  height: (9 * CUSTOM_BOARD_REFERENCE_CELL_SIZE * 100) / CUSTOM_BOARD_REFERENCE_HEIGHT,
+};
 const DRAW_BRUSH_SEQUENCE: XiangqiDrawBrush[] = ["green", "red", "blue", "yellow"];
 const DRAW_BRUSHES: Record<
   XiangqiDrawBrush,
@@ -154,11 +191,15 @@ export function XiangqiBoard({
   pieceTextScale = 100,
   pieceInnerScale = 80,
   pieceInnerRingVisible = true,
+  customBoardImageUrl,
+  customBoardCalibration = DEFAULT_CUSTOM_BOARD_CALIBRATION,
   customPieceUrls,
+  customPieceScale = 100,
   shapes = [],
   autoShapes = [],
   showDests = true,
   showLastMove = true,
+  coordinates = "no",
   moveMethod = "both",
   snapDrawings = true,
   drawingsEnabled = true,
@@ -177,11 +218,15 @@ export function XiangqiBoard({
   pieceTextScale?: number;
   pieceInnerScale?: number;
   pieceInnerRingVisible?: boolean;
+  customBoardImageUrl?: string;
+  customBoardCalibration?: CustomBoardCalibration;
   customPieceUrls?: CustomPieceUrls;
+  customPieceScale?: number;
   shapes?: XiangqiDrawShape[];
   autoShapes?: XiangqiDrawShape[];
   showDests?: boolean;
   showLastMove?: boolean;
+  coordinates?: CoordinateDisplay;
   moveMethod?: MoveMethod;
   snapDrawings?: boolean;
   drawingsEnabled?: boolean;
@@ -193,6 +238,10 @@ export function XiangqiBoard({
 }) {
   const [drawing, setDrawing] = useState<DrawingState | null>(null);
   const [dragging, setDragging] = useState<Square | null>(null);
+  const [customBoardImageSize, setCustomBoardImageSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
   const suppressClick = useRef(false);
   const dests = legalDests(position);
   const selectedDests = selected ? (dests.get(selected) ?? []) : [];
@@ -213,6 +262,39 @@ export function XiangqiBoard({
     XIANGQI_PIECE_INNER_SCALE_MAX,
   );
   const showPieceInnerRing = pieceInnerRingVisible && xiangqiPieceStyleHasInnerRing(pieceStyle);
+  const boardLayout =
+    boardTheme === "custom-png"
+      ? customPngBoardLayout(customBoardCalibration, customBoardImageSize)
+      : BUILTIN_BOARD_LAYOUT;
+  const customBoardBackground = customBoardImageUrl
+    ? `url("${customBoardImageUrl.replace(/"/g, '\\"')}")`
+    : undefined;
+
+  useEffect(() => {
+    if (boardTheme !== "custom-png" || !customBoardImageUrl) {
+      setCustomBoardImageSize(null);
+      return;
+    }
+
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+      setCustomBoardImageSize({
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      });
+    };
+    image.onerror = () => {
+      if (!cancelled) setCustomBoardImageSize(null);
+    };
+    image.src = customBoardImageUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [boardTheme, customBoardImageUrl]);
+
   const handlePoint = (target: Square) => {
     if (onPutPiece && editingPiece !== undefined) {
       onPutPiece(target, editingPiece);
@@ -255,7 +337,7 @@ export function XiangqiBoard({
     event.stopPropagation();
     event.currentTarget.releasePointerCapture(event.pointerId);
     const board = event.currentTarget.parentElement;
-    const target = board ? squareFromPointer(event, board, orientation, true) : null;
+    const target = board ? squareFromPointer(event, board, orientation, true, boardLayout) : null;
     const legalTargets = dests.get(dragging) ?? [];
 
     if (target && legalTargets.includes(target)) {
@@ -268,7 +350,13 @@ export function XiangqiBoard({
   const startDrawing = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!drawingsEnabled || !onShapesChange || (event.button !== 2 && !event.shiftKey)) return;
 
-    const orig = squareFromPointer(event, event.currentTarget, orientation, snapDrawings);
+    const orig = squareFromPointer(
+      event,
+      event.currentTarget,
+      orientation,
+      snapDrawings,
+      boardLayout,
+    );
     if (!orig) return;
 
     event.preventDefault();
@@ -286,7 +374,13 @@ export function XiangqiBoard({
 
     event.preventDefault();
     event.stopPropagation();
-    const dest = squareFromPointer(event, event.currentTarget, orientation, snapDrawings);
+    const dest = squareFromPointer(
+      event,
+      event.currentTarget,
+      orientation,
+      snapDrawings,
+      boardLayout,
+    );
     setDrawing((current) =>
       current && current.pointerId === event.pointerId
         ? { ...current, dest: dest && dest !== current.orig ? dest : undefined }
@@ -300,7 +394,13 @@ export function XiangqiBoard({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.releasePointerCapture(event.pointerId);
-    const dest = squareFromPointer(event, event.currentTarget, orientation, snapDrawings);
+    const dest = squareFromPointer(
+      event,
+      event.currentTarget,
+      orientation,
+      snapDrawings,
+      boardLayout,
+    );
     const shape: XiangqiDrawShape = {
       orig: drawing.orig,
       dest: dest && dest !== drawing.orig ? dest : undefined,
@@ -316,7 +416,7 @@ export function XiangqiBoard({
   };
 
   return (
-    <div className={classes.boardWrap}>
+    <div className={classes.boardWrap} data-theme={boardTheme}>
       <div
         className={classes.board}
         data-theme={boardTheme}
@@ -330,6 +430,13 @@ export function XiangqiBoard({
             }`,
             "--piece-inner-size": `${clampedPieceInnerScale}%`,
             "--piece-inner-inset": `${(100 - clampedPieceInnerScale) / 2}%`,
+            "--custom-piece-size": `${clamp(customPieceScale, 80, 120)}%`,
+            "--grid-pad-x": `${boardLayout.padX}%`,
+            "--grid-pad-y": `${boardLayout.padY}%`,
+            "--grid-width": `${boardLayout.width}%`,
+            "--grid-height": `${boardLayout.height}%`,
+            "--piece-size": `${boardLayout.width / 8}%`,
+            backgroundImage: customBoardBackground,
           } as CSSProperties
         }
         onMouseDown={(event) => event.preventDefault()}
@@ -377,15 +484,24 @@ export function XiangqiBoard({
           <DrawShapes shapes={visibleShapes} orientation={orientation} />
         )}
 
-        <div className={classes.river} style={riverStyle()}>
+        <div className={classes.river} style={riverStyle(boardLayout)}>
           <span>{"\u695a\u6cb3"}</span>
           <span>{"\u6c49\u754c"}</span>
         </div>
 
+        {coordinates !== "no" && (
+          <XiangqiCoordinates orientation={orientation} layout={boardLayout} mode={coordinates} />
+        )}
+
         {showLastMove && lastMove && (
           <>
-            <Marker square={lastMove.from} orientation={orientation} kind="from" />
-            <Marker square={lastMove.to} orientation={orientation} kind="to" />
+            <Marker
+              square={lastMove.from}
+              orientation={orientation}
+              layout={boardLayout}
+              kind="from"
+            />
+            <Marker square={lastMove.to} orientation={orientation} layout={boardLayout} kind="to" />
           </>
         )}
 
@@ -396,7 +512,7 @@ export function XiangqiBoard({
               type="button"
               aria-label={`Move to ${dest}`}
               className={clsx(classes.dest, position.board.has(dest) && classes.captureDest)}
-              style={pointStyle(dest, orientation)}
+              style={pointStyle(dest, orientation, boardLayout)}
               onClick={() => handlePoint(dest)}
             />
           ))}
@@ -409,7 +525,7 @@ export function XiangqiBoard({
                 key={`edit-${sq}`}
                 type="button"
                 className={classes.editPoint}
-                style={pointStyle(sq, orientation)}
+                style={pointStyle(sq, orientation, boardLayout)}
                 aria-label={`Edit ${sq}`}
                 onClick={() => handlePoint(sq)}
               />
@@ -431,7 +547,7 @@ export function XiangqiBoard({
                 piece.color === "red" ? classes.pieceRed : classes.pieceBlack,
                 (selected === sq || dragging === sq) && classes.selected,
               )}
-              style={pointStyle(sq, orientation)}
+              style={pointStyle(sq, orientation, boardLayout)}
               onPointerDown={(event) => startPieceDrag(sq, event)}
               onPointerUp={finishPieceDrag}
               onPointerCancel={() => setDragging(null)}
@@ -476,12 +592,12 @@ function displayRank(rank: number, orientation: Orientation): number {
   return orientation === "red" ? 9 - rank : rank;
 }
 
-function pointLeft(file: number, orientation: Orientation): number {
-  return GRID_PAD_X + (displayFile(file, orientation) / 8) * GRID_WIDTH;
+function pointLeft(file: number, orientation: Orientation, layout: BoardLayout): number {
+  return layout.padX + (displayFile(file, orientation) / 8) * layout.width;
 }
 
-function pointTop(rank: number, orientation: Orientation): number {
-  return GRID_PAD_Y + (displayRank(rank, orientation) / 9) * GRID_HEIGHT;
+function pointTop(rank: number, orientation: Orientation, layout: BoardLayout): number {
+  return layout.padY + (displayRank(rank, orientation) / 9) * layout.height;
 }
 
 function svgPoint(file: number, rank: number, orientation: Orientation): { x: number; y: number } {
@@ -491,11 +607,11 @@ function svgPoint(file: number, rank: number, orientation: Orientation): { x: nu
   };
 }
 
-function pointStyle(sq: Square, orientation: Orientation) {
+function pointStyle(sq: Square, orientation: Orientation, layout: BoardLayout) {
   const { file, rank } = coords(sq);
   return {
-    left: `${pointLeft(file, orientation)}%`,
-    top: `${pointTop(rank, orientation)}%`,
+    left: `${pointLeft(file, orientation, layout)}%`,
+    top: `${pointTop(rank, orientation, layout)}%`,
   };
 }
 
@@ -504,12 +620,13 @@ function squareFromPointer(
   element: HTMLElement,
   orientation: Orientation,
   snapDrawings: boolean,
+  layout: BoardLayout,
 ): Square | null {
   const rect = element.getBoundingClientRect();
   const x = ((event.clientX - rect.left) / rect.width) * 100;
   const y = ((event.clientY - rect.top) / rect.height) * 100;
-  const displayFileFloat = ((x - GRID_PAD_X) / GRID_WIDTH) * 8;
-  const displayRankFloat = ((y - GRID_PAD_Y) / GRID_HEIGHT) * 9;
+  const displayFileFloat = ((x - layout.padX) / layout.width) * 8;
+  const displayRankFloat = ((y - layout.padY) / layout.height) * 9;
   const margin = snapDrawings ? 0.55 : 0.35;
 
   if (
@@ -530,6 +647,49 @@ function squareFromPointer(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function finiteOr(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function customPngBoardLayout(
+  calibration: CustomBoardCalibration,
+  imageSize: { width: number; height: number } | null,
+): BoardLayout {
+  if (!imageSize) return CUSTOM_PNG_BOARD_LAYOUT;
+
+  const mode = calibration.mode ?? DEFAULT_CUSTOM_BOARD_CALIBRATION.mode;
+  const imageWidth = imageSize.width;
+  const imageHeight = imageSize.height;
+  const heightScale = imageHeight / CUSTOM_BOARD_REFERENCE_HEIGHT;
+  const scale =
+    mode === "scale"
+      ? finiteOr(calibration.scale, DEFAULT_CUSTOM_BOARD_CALIBRATION.scale) / 100
+      : 1;
+  const cellSize =
+    mode === "manual"
+      ? finiteOr(calibration.cellSize, CUSTOM_BOARD_REFERENCE_CELL_SIZE)
+      : CUSTOM_BOARD_REFERENCE_CELL_SIZE * heightScale * scale;
+  const originX =
+    mode === "manual"
+      ? finiteOr(calibration.originX, CUSTOM_BOARD_REFERENCE_ORIGIN_X)
+      : imageWidth / 2 - 4 * cellSize;
+  const originY =
+    mode === "manual"
+      ? finiteOr(calibration.originY, CUSTOM_BOARD_REFERENCE_ORIGIN_Y)
+      : imageHeight / 2 - 4.5 * cellSize;
+  const renderScale = CUSTOM_BOARD_REFERENCE_HEIGHT / imageHeight;
+  const renderedImageWidth = imageWidth * renderScale;
+  const imageLeft = (CUSTOM_BOARD_REFERENCE_WIDTH - renderedImageWidth) / 2;
+  const renderedCellSize = cellSize * renderScale;
+
+  return {
+    padX: ((imageLeft + originX * renderScale) / CUSTOM_BOARD_REFERENCE_WIDTH) * 100,
+    padY: ((originY * renderScale) / CUSTOM_BOARD_REFERENCE_HEIGHT) * 100,
+    width: ((8 * renderedCellSize) / CUSTOM_BOARD_REFERENCE_WIDTH) * 100,
+    height: ((9 * renderedCellSize) / CUSTOM_BOARD_REFERENCE_HEIGHT) * 100,
+  };
 }
 
 function eventBrush(event: ReactPointerEvent): XiangqiDrawBrush {
@@ -730,28 +890,91 @@ function shapeKey(shape: XiangqiDrawShape): string {
   return `${shape.orig}-${shape.dest ?? "circle"}-${shape.brush ?? "green"}`;
 }
 
-function riverStyle() {
+function riverStyle(layout: BoardLayout) {
   return {
-    left: `${GRID_PAD_X}%`,
-    top: `${GRID_PAD_Y + (GRID_HEIGHT * 4) / 9}%`,
-    width: `${GRID_WIDTH}%`,
-    height: `${GRID_HEIGHT / 9}%`,
+    left: `${layout.padX}%`,
+    top: `${layout.padY + (layout.height * 4) / 9}%`,
+    width: `${layout.width}%`,
+    height: `${layout.height / 9}%`,
   };
+}
+
+function XiangqiCoordinates({
+  orientation,
+  layout,
+  mode,
+}: {
+  orientation: Orientation;
+  layout: BoardLayout;
+  mode: Exclude<CoordinateDisplay, "no">;
+}) {
+  const topColor: XiangqiColor = orientation === "red" ? "black" : "red";
+  const bottomColor: XiangqiColor = orientation === "red" ? "red" : "black";
+  const topY = clamp(layout.padY / 2, 2.2, 97.8);
+  const bottomY = clamp(
+    layout.padY + layout.height + (100 - layout.padY - layout.height) / 2,
+    2.2,
+    97.8,
+  );
+
+  return (
+    <>
+      {XIANGQI_FILES.map((file) => (
+        <span
+          key={`coord-top-${file}`}
+          className={clsx(classes.coordinate, classes.coordinateEdge)}
+          style={{ left: `${pointLeft(file, orientation, layout)}%`, top: `${topY}%` }}
+        >
+          {xiangqiFileLabel(file, topColor)}
+        </span>
+      ))}
+      {XIANGQI_FILES.map((file) => (
+        <span
+          key={`coord-bottom-${file}`}
+          className={clsx(classes.coordinate, classes.coordinateEdge)}
+          style={{ left: `${pointLeft(file, orientation, layout)}%`, top: `${bottomY}%` }}
+        >
+          {xiangqiFileLabel(file, bottomColor)}
+        </span>
+      ))}
+      {mode === "all" &&
+        XIANGQI_RANKS.flatMap((rank) =>
+          XIANGQI_FILES.map((file) => {
+            const sq = square(file, rank);
+            return (
+              <span
+                key={`coord-point-${sq}`}
+                className={clsx(classes.coordinate, classes.coordinatePoint)}
+                style={pointStyle(sq, orientation, layout)}
+              >
+                {sq}
+              </span>
+            );
+          }),
+        )}
+    </>
+  );
+}
+
+function xiangqiFileLabel(file: number, color: XiangqiColor): string {
+  return color === "red" ? (RED_FILE_LABELS[file] ?? "") : (BLACK_FILE_LABELS[file] ?? "");
 }
 
 function Marker({
   square: sq,
   orientation,
+  layout,
   kind,
 }: {
   square: Square;
   orientation: Orientation;
+  layout: BoardLayout;
   kind: "from" | "to";
 }) {
   return (
     <span
       className={clsx(classes.lastMove, kind === "from" && classes.lastMoveFrom)}
-      style={pointStyle(sq, orientation)}
+      style={pointStyle(sq, orientation, layout)}
     />
   );
 }

@@ -43,6 +43,9 @@ engine/**/*.dylib
 # Local reference copy and bundled upstream sources
 en-croissant-master/
 
+# Local custom board images
+custom-board/
+
 # Local environment
 .env
 .env.*

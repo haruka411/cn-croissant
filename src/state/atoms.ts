@@ -30,6 +30,10 @@ import {
 import { getWinChance, normalizeScore } from "@/utils/score";
 import { genID, type Tab, tabSchema } from "@/utils/tabs";
 import type { XiangqiDrawShape } from "@/xiangqi/xiangqi";
+import {
+    DEFAULT_CUSTOM_BOARD_CALIBRATION,
+    type CustomBoardCalibration,
+} from "@/xiangqi/customBoardTheme";
 import { getEnginesDir } from "../utils/directories";
 import type { Session } from "../utils/session";
 import { createAsyncZodStorage, createZodStorage } from "./utils";
@@ -198,6 +202,11 @@ export const xiangqiReportScoresAtom = atomWithStorage<Record<string, Record<str
     {},
     createJSONStorage(() => sessionStorage),
 );
+type XiangqiReportGoMode = Extract<GoMode, { t: "Time" | "Depth" | "Nodes" }>;
+export const xiangqiReportGoModeAtom = atomWithStorage<XiangqiReportGoMode>(
+    "xiangqi-report-go-mode-v2",
+    { t: "Depth", c: 15 },
+);
 export const autoPromoteAtom = atomWithStorage<boolean>("auto-promote", true);
 export const autoSaveAtom = atomWithStorage<boolean>("auto-save", true);
 export const previewBoardOnHoverAtom = atomWithStorage<boolean>("preview-board-on-hover", true);
@@ -245,12 +254,21 @@ export type XiangqiBoardTheme =
     | "walnut"
     | "porcelain"
     | "slate"
-    | "crystal";
+    | "crystal"
+    | "custom-png";
 
 export const pieceSetAtom = atomWithStorage<XiangqiPieceStyle>("piece-set", "classic");
 export const customPieceThemeConfirmedAtom = atomWithStorage<boolean>(
     "custom-piece-theme-confirmed-v1",
     false,
+);
+export const customPieceDirectoryAtom = atomWithStorage<string>("custom-piece-directory", "");
+export const customPieceScaleAtom = atomWithStorage<number>("custom-piece-scale", 100);
+export const customBoardDirectoryAtom = atomWithStorage<string>("custom-board-directory", "");
+export const customBoardImageAtom = atomWithStorage<string>("custom-board-image", "");
+export const customBoardCalibrationAtom = atomWithStorage<CustomBoardCalibration>(
+    "custom-board-calibration-v1",
+    DEFAULT_CUSTOM_BOARD_CALIBRATION,
 );
 export const xiangqiPieceTextScaleAtom = atomWithStorage<number>("xiangqi-piece-text-scale", 100);
 export const xiangqiPieceInnerScaleAtom = atomWithStorage<number>("xiangqi-piece-inner-scale", 80);

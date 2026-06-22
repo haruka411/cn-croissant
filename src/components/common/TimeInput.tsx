@@ -1,4 +1,4 @@
-import { NumberInput, Select } from "@mantine/core";
+import { NumberInput, type NumberInputProps, Select } from "@mantine/core";
 import { useState } from "react";
 import { match } from "ts-pattern";
 import type { GoMode } from "@/bindings";
@@ -10,12 +10,16 @@ function TimeInput({
   defaultType,
   type,
   onTypeChange,
+  disabled,
+  size,
 }: {
   value: number;
   setValue: (v: GoMode) => void;
   defaultType?: TimeType;
   type?: TimeType;
   onTypeChange?: (type: TimeType) => void;
+  disabled?: boolean;
+  size?: NumberInputProps["size"];
 }) {
   const [internalTimeType, setInternalTimeType] = useState<TimeType>(defaultType ?? "ms");
 
@@ -37,6 +41,8 @@ function TimeInput({
 
   return (
     <NumberInput
+      size={size}
+      disabled={disabled}
       min={0}
       decimalScale={2}
       allowDecimal={false}
@@ -44,6 +50,8 @@ function TimeInput({
       rightSection={
         <Select
           withCheckIcon={false}
+          size={size}
+          disabled={disabled}
           data={["ms", "s", "m", "h"]}
           defaultValue="ms"
           allowDeselect={false}

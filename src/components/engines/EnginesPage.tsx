@@ -34,7 +34,7 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { platform } from "@tauri-apps/plugin-os";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import useSWRImmutable from "swr/immutable";
@@ -56,12 +56,11 @@ import GoModeInput from "../common/GoModeInput";
 import LocalImage from "../common/LocalImage";
 import OpenFolderButton from "../common/OpenFolderButton";
 import AddEngine from "./AddEngine";
-import { upsertBuiltinPikafish } from "@/utils/builtinEngine";
 
 export default function EnginesPage() {
   const { t } = useTranslation();
 
-  const [engines, setEngines] = useAtom(enginesAtom);
+  const engines = useAtomValue(enginesAtom);
   const enginesList = useMemo(
     () => (engines ?? []).filter((engine): engine is LocalEngine => engine.type === "local"),
     [engines],
@@ -98,16 +97,6 @@ export default function EnginesPage() {
   }, [enginesList, search]);
   const hasSearch = search.trim().length > 0;
   const hasEngines = enginesList.length > 0;
-
-  useEffect(() => {
-    setEngines(async (prev) => {
-      try {
-        return await upsertBuiltinPikafish(await prev);
-      } catch {
-        return (await prev).filter((engine): engine is LocalEngine => engine.type === "local");
-      }
-    });
-  }, [setEngines]);
 
   return (
     <Stack h="100%">

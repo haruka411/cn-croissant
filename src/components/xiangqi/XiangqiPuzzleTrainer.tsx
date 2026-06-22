@@ -32,10 +32,15 @@ import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   boardImageAtom,
+  customBoardCalibrationAtom,
+  customBoardImageAtom,
+  customPieceDirectoryAtom,
+  customPieceScaleAtom,
   customPieceThemeConfirmedAtom,
   moveHighlightAtom,
   moveMethodAtom,
   pieceSetAtom,
+  showCoordinatesAtom,
   showDestsAtom,
   snapArrowsAtom,
   xiangqiPieceInnerRingVisibleAtom,
@@ -57,6 +62,7 @@ import {
 } from "@/xiangqi/xiangqi";
 import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
 import { useCustomXiangqiPieces } from "@/xiangqi/customPieceTheme";
+import { customBoardImageUrl as getCustomBoardImageUrl } from "@/xiangqi/customBoardTheme";
 import {
   queryXiangqiPuzzleBestMove,
   queryXiangqiPuzzleMoves,
@@ -99,21 +105,36 @@ export default function XiangqiPuzzleTrainer() {
   const { ref: boardParentRef, height: boardParentHeight } = useElementSize();
 
   const boardTheme = useAtomValue(boardImageAtom);
+  const customBoardCalibration = useAtomValue(customBoardCalibrationAtom);
+  const customBoardImage = useAtomValue(customBoardImageAtom);
   const pieceStyle = useAtomValue(pieceSetAtom);
+  const customPieceDirectory = useAtomValue(customPieceDirectoryAtom);
+  const customPieceScale = useAtomValue(customPieceScaleAtom);
   const customPieceThemeConfirmed = useAtomValue(customPieceThemeConfirmedAtom);
   const pieceTextScale = useAtomValue(xiangqiPieceTextScaleAtom);
   const pieceInnerScale = useAtomValue(xiangqiPieceInnerScaleAtom);
   const pieceInnerRingVisible = useAtomValue(xiangqiPieceInnerRingVisibleAtom);
-  const customPieceTheme = useCustomXiangqiPieces(pieceStyle === "custom-svg");
+  const customPieceTheme = useCustomXiangqiPieces(
+    pieceStyle === "custom-svg",
+    customPieceDirectory || undefined,
+  );
   const customPieceWarningShownRef = useRef(false);
   const showDests = useAtomValue(showDestsAtom);
   const showLastMove = useAtomValue(moveHighlightAtom);
+  const showCoordinates = useAtomValue(showCoordinatesAtom);
   const moveMethod = useAtomValue(moveMethodAtom);
   const snapArrows = useAtomValue(snapArrowsAtom);
 
   const currentPuzzle = PUZZLES[puzzleIndex % PUZZLES.length] ?? FIRST_PUZZLE;
   const normalizedFen = useMemo(() => makeFen(position), [position]);
   const orientation = useMemo(() => fenSide(currentPuzzle.fen), [currentPuzzle.fen]);
+  const customBoardUrl =
+    boardTheme === "custom-png" && customBoardImage
+      ? getCustomBoardImageUrl(customBoardImage)
+      : undefined;
+  const resolvedBoardTheme =
+    boardTheme === "custom-png" && !customBoardUrl ? "classic" : boardTheme;
+  const boardAspectRatio = resolvedBoardTheme === "custom-png" ? "767 / 842" : "9 / 10";
   const targetShape = useMemo<XiangqiDrawShape[]>(() => {
     if (!showHint || !targetMove) return [];
     const move = parseUciMove(targetMove);
@@ -341,7 +362,7 @@ export default function XiangqiPuzzleTrainer() {
               <Box
                 className={classes.chessboard}
                 style={{
-                  aspectRatio: "9 / 10",
+                  aspectRatio: boardAspectRatio,
                   height:
                     boardParentHeight > 0
                       ? `min(100%, ${Math.max(0, boardParentHeight - 76)}px)`
@@ -362,7 +383,7 @@ export default function XiangqiPuzzleTrainer() {
                     selected={selected}
                     lastMove={lastMove}
                     orientation={orientation}
-                    boardTheme={boardTheme}
+                    boardTheme={resolvedBoardTheme}
                     pieceStyle={
                       useCustomPieces
                         ? "custom-svg"
@@ -373,9 +394,13 @@ export default function XiangqiPuzzleTrainer() {
                     pieceTextScale={pieceTextScale}
                     pieceInnerScale={pieceInnerScale}
                     pieceInnerRingVisible={pieceInnerRingVisible[pieceStyle] ?? true}
+                    customBoardImageUrl={customBoardUrl}
+                    customBoardCalibration={customBoardCalibration}
                     customPieceUrls={useCustomPieces ? customPieceTheme.urls : undefined}
+                    customPieceScale={customPieceScale}
                     showDests={showDests}
                     showLastMove={showLastMove}
+                    coordinates={showCoordinates}
                     moveMethod={moveMethod}
                     autoShapes={targetShape}
                     snapDrawings={snapArrows}

@@ -1,4 +1,3 @@
-import { AreaChart } from "@mantine/charts";
 import {
   DragDropContext,
   Draggable,
@@ -62,18 +61,37 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  Area,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type { CategoricalChartFunc } from "recharts/types/chart/types";
 import type { EngineLog, GoMode } from "@/bindings";
 import EngineLogsView from "@/components/common/EngineLogsView";
 import TimeInput from "@/components/common/TimeInput";
 import {
+  boardImageAtom,
+  customBoardCalibrationAtom,
+  customBoardImageAtom,
+  customPieceDirectoryAtom,
+  customPieceScaleAtom,
+  customPieceThemeConfirmedAtom,
   currentAnalysisTabAtom,
   currentTabAtom,
   enginesAtom,
+  pieceSetAtom,
   showArrowsAtom,
   showConsecutiveArrowsAtom,
   xiangqiEngineArrowsAtom,
   xiangqiEvaluationAtom,
+  xiangqiReportGoModeAtom,
   xiangqiReportScoresAtom,
 } from "@/state/atoms";
 import type { Engine, EngineSettings, LocalEngine } from "@/utils/engines";
@@ -86,10 +104,12 @@ import {
   formatXiangqiScore,
   isPositiveXiangqiScore,
   parseXiangqiEvaluation,
+  parseXiangqiScore,
   scoreToXiangqiWinChance,
 } from "@/xiangqi/evaluation";
 import {
   applyMove,
+  isCheckmate,
   makeFen,
   opposite,
   parseFen,
@@ -103,6 +123,8 @@ import {
 } from "@/xiangqi/xiangqi";
 import { useXiangqiStore } from "@/xiangqi/store";
 import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
+import { customBoardImageUrl as getCustomBoardImageUrl } from "@/xiangqi/customBoardTheme";
+import { useCustomXiangqiPieces } from "@/xiangqi/customPieceTheme";
 
 type EngineLine = {
   multipv: number;
@@ -336,7 +358,9 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
     for (const [index, engine] of [...activeOrderedEngines].reverse().entries()) {
       const engineArrows = buildXiangqiEngineArrows(
         results[engine.id]?.analysis?.lines ?? [],
-        ENGINE_ARROW_BRUSHES[(activeOrderedEngines.length - 1 - index) % ENGINE_ARROW_BRUSHES.length],
+        ENGINE_ARROW_BRUSHES[
+          (activeOrderedEngines.length - 1 - index) % ENGINE_ARROW_BRUSHES.length
+        ],
         showConsecutiveArrows,
       );
 
@@ -1226,6 +1250,7 @@ function XiangqiReportPanel() {
   const reportNodes = useMemo(() => buildXiangqiReportNodes(root), [root]);
   const [engineId, setEngineId] = useState("");
   const [reportScores, setReportScores] = useAtom(xiangqiReportScoresAtom);
+  const [reportGoMode, setReportGoMode] = useAtom(xiangqiReportGoModeAtom);
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -1255,13 +1280,17 @@ function XiangqiReportPanel() {
   }, [engineId, selectedEngine]);
 
   const data = useMemo(() => buildXiangqiEvalChartData(reportNodes, scores), [reportNodes, scores]);
-  const currentPointName = data.find((point) => samePath(point.path, path))?.name;
-  const hasScores = data.some((point) => point.value !== "none");
-  const analysedCount = data.filter((point) => point.value !== "none").length;
+  const chartXDomain = useMemo(() => getXiangqiEvalChartXDomain(data), [data]);
+  const currentPointX = data.find((point) => point.path && samePath(point.path, path))?.x;
+  const hasScores = data.some((point) => point.value !== null || point.mateSign !== null);
+  const analysedCount = data.filter((point) => point.value !== null || point.mateSign !== null)
+    .length;
 
   const onChartClick: CategoricalChartFunc = (event) => {
-    const point = data.find((candidate) => candidate.name === event.activeLabel);
-    if (point) goToMove(point.path);
+    const activeX =
+      typeof event.activeLabel === "number" ? event.activeLabel : Number(event.activeLabel);
+    const point = findNearestXiangqiEvalChartPoint(data, activeX);
+    if (point?.path) goToMove(point.path);
   };
 
   const generateReport = useCallback(async () => {
@@ -1277,7 +1306,18 @@ function XiangqiReportPanel() {
       for (const [index, entry] of reportNodes.entries()) {
         if (cancelledRef.current) break;
 
-        const analysis = await analyzeXiangqiReportPosition(selectedEngine, entry.node.fen);
+        if (isCheckmate(parseFen(entry.node.fen))) {
+          nextScores[entry.node.fen] = "mate -1";
+          setScores({ ...nextScores });
+          setProgress(((index + 1) / reportNodes.length) * 100);
+          continue;
+        }
+
+        const analysis = await analyzeXiangqiReportPosition(
+          selectedEngine,
+          entry.node.fen,
+          reportGoMode,
+        );
         const score = analysis.lines[0]?.score;
         if (score) {
           nextScores[entry.node.fen] = score;
@@ -1295,12 +1335,22 @@ function XiangqiReportPanel() {
       }
       setIsGenerating(false);
     }
-  }, [reportNodes, selectedEngine, setScores]);
+  }, [reportGoMode, reportNodes, selectedEngine, setScores]);
 
   const stopReport = useCallback(() => {
     cancelledRef.current = true;
     setIsGenerating(false);
   }, []);
+  const chartDomain = useMemo(() => getXiangqiEvalChartDomain(data), [data]);
+  const chartData = useMemo(
+    () => buildXiangqiEvalChartRenderData(data, chartDomain),
+    [chartDomain, data],
+  );
+  const chartTicks = useMemo(() => getXiangqiEvalChartTicks(chartDomain), [chartDomain]);
+  const chartTickFormatter = useCallback(
+    (value: string | number) => formatXiangqiEvalChartTick(value, chartDomain),
+    [chartDomain],
+  );
 
   if (data.length === 0) {
     return (
@@ -1324,6 +1374,7 @@ function XiangqiReportPanel() {
             <Select
               flex={1}
               size="xs"
+              label={t("Common.Engine")}
               allowDeselect={false}
               disabled={isGenerating || loadedEngines.length === 0}
               value={selectedEngine?.id ?? ""}
@@ -1331,9 +1382,15 @@ function XiangqiReportPanel() {
               data={loadedEngines.map((engine) => ({ value: engine.id, label: engine.name }))}
               placeholder={t("Board.Analysis.EngineRequired")}
             />
+            <XiangqiReportGoModeInput
+              goMode={reportGoMode}
+              setGoMode={setReportGoMode}
+              disabled={isGenerating}
+            />
             <Button
               size="xs"
               variant="light"
+              mt="auto"
               disabled={!selectedEngine || data.length === 0}
               loading={isGenerating}
               onClick={generateReport}
@@ -1341,7 +1398,7 @@ function XiangqiReportPanel() {
               {t("Board.Analysis.GenerateReport")}
             </Button>
             {isGenerating && (
-              <Button size="xs" variant="default" onClick={stopReport}>
+              <Button size="xs" variant="default" mt="auto" onClick={stopReport}>
                 {t("Common.Cancel")}
               </Button>
             )}
@@ -1357,44 +1414,100 @@ function XiangqiReportPanel() {
 
       <Paper withBorder p="sm">
         {hasScores ? (
-          <AreaChart
-            h={220}
-            data={data}
-            dataKey="name"
-            series={[{ name: "value", color: "red.6" }]}
-            curveType="monotone"
-            connectNulls={false}
-            withXAxis={false}
-            withYAxis
-            yAxisProps={{ domain: [-1, 1], width: 34 }}
-            type="split"
-            fillOpacity={0.7}
-            splitColors={["red.1", "dark.8"]}
-            splitOffset={0.5}
-            activeDotProps={{ r: 4, strokeWidth: 1 }}
-            dotProps={{ r: 2.5, strokeWidth: 1 }}
-            gridAxis="none"
-            referenceLines={
-              currentPointName
-                ? [
-                    {
-                      x: currentPointName,
-                      color: theme.colors[theme.primaryColor][7],
-                    },
-                  ]
-                : []
-            }
-            areaChartProps={{
-              onClick: onChartClick,
-              style: { cursor: "pointer" },
-            }}
-            areaProps={{ isAnimationActive: false }}
-            tooltipProps={{
-              content: ({ payload, active }) => (
-                <XiangqiEvalChartTooltip active={active} payload={payload} />
-              ),
-            }}
-          />
+          <Box h={220}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart
+                data={chartData}
+                margin={{ top: 12, right: 8, bottom: 12, left: 8 }}
+                onClick={onChartClick}
+                style={{ cursor: "pointer" }}
+              >
+                <CartesianGrid
+                  horizontal
+                  vertical={false}
+                  horizontalValues={chartTicks}
+                  stroke={theme.colors.gray[4]}
+                  strokeDasharray="4 4"
+                />
+                <XAxis allowDataOverflow dataKey="x" domain={chartXDomain} hide type="number" />
+                <YAxis
+                  allowDataOverflow
+                  allowDecimals={false}
+                  axisLine={false}
+                  domain={chartDomain}
+                  interval={0}
+                  padding={{ top: 12, bottom: 12 }}
+                  tick={{ fill: theme.colors.gray[6], fontSize: 11 }}
+                  tickFormatter={chartTickFormatter}
+                  tickLine={false}
+                  ticks={chartTicks}
+                  width={52}
+                />
+                <ReferenceLine
+                  y={0}
+                  stroke={theme.colors.gray[5]}
+                  strokeDasharray="4 4"
+                  ifOverflow="extendDomain"
+                />
+                {currentPointX !== undefined && (
+                  <ReferenceLine
+                    x={currentPointX}
+                    stroke={theme.colors[theme.primaryColor][7]}
+                    ifOverflow="discard"
+                  />
+                )}
+                <Area
+                  activeDot={false}
+                  baseValue={0}
+                  connectNulls={false}
+                  dataKey="positiveValue"
+                  dot={false}
+                  fill={theme.colors.red[5]}
+                  fillOpacity={0.32}
+                  isAnimationActive={false}
+                  stroke="none"
+                  type="monotone"
+                />
+                <Area
+                  activeDot={false}
+                  baseValue={0}
+                  connectNulls={false}
+                  dataKey="negativeValue"
+                  dot={false}
+                  fill={theme.colors.blue[5]}
+                  fillOpacity={0.28}
+                  isAnimationActive={false}
+                  stroke="none"
+                  type="monotone"
+                />
+                <Line
+                  activeDot={{ r: 4, strokeWidth: 1 }}
+                  connectNulls={false}
+                  dataKey="positiveValue"
+                  dot={{ r: 2.5, strokeWidth: 1 }}
+                  isAnimationActive={false}
+                  stroke={theme.colors.red[6]}
+                  strokeWidth={2.2}
+                  type="monotone"
+                />
+                <Line
+                  activeDot={{ r: 4, strokeWidth: 1 }}
+                  connectNulls={false}
+                  dataKey="negativeValue"
+                  dot={{ r: 2.5, strokeWidth: 1 }}
+                  isAnimationActive={false}
+                  stroke={theme.colors.blue[6]}
+                  strokeWidth={2.2}
+                  type="monotone"
+                />
+                <RechartsTooltip
+                  content={({ payload, active }) => (
+                    <XiangqiEvalChartTooltip active={active} payload={payload} />
+                  )}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </Box>
         ) : (
           <Stack h={220} align="center" justify="center">
             <Text c="dimmed" size="sm">
@@ -1410,11 +1523,16 @@ function XiangqiReportPanel() {
 }
 
 type XiangqiEvalChartPoint = {
+  x: number;
   name: string;
+  mateSign: -1 | 1 | null;
   move: string;
+  negativeValue: number | null;
+  positiveValue: number | null;
   scoreText: string;
-  value: number | "none";
-  path: number[];
+  value: number | null;
+  path: number[] | null;
+  synthetic?: boolean;
 };
 
 type XiangqiReportNode = {
@@ -1435,34 +1553,141 @@ function buildXiangqiEvalChartData(
   scores: Record<string, string>,
 ): XiangqiEvalChartPoint[] {
   return reportNodes.map(({ node, path }, index) => {
-    const turn = parseFen(node.fen).turn;
+    const position = parseFen(node.fen);
+    const turn = position.turn;
     const score = scores[node.fen];
+    const terminalMateSign = score ? getXiangqiTerminalReportMateSign(position) : null;
+    const parsedScore = parseXiangqiScore(score);
     const evaluation = score ? parseXiangqiEvaluation(score, turn) : null;
-    const value =
-      evaluation?.redCentipawns !== undefined
-        ? 2 / (1 + Math.exp(-0.004 * evaluation.redCentipawns)) - 1
-        : "none";
+    const engineMateSign =
+      parsedScore?.kind === "mate" && evaluation
+        ? getXiangqiChartSign(evaluation.redCentipawns)
+        : null;
+    const mateSign = terminalMateSign ?? engineMateSign;
+    const redCentipawns =
+      mateSign === null && evaluation?.redCentipawns !== undefined ? evaluation.redCentipawns : null;
+    const value = redCentipawns !== null ? redCentipawns / 100 : null;
 
     return {
+      x: index,
+      mateSign,
       name: `${index + 1}. ${node.text}`,
       move: node.text,
-      scoreText: evaluation?.label ?? "-",
+      negativeValue: getXiangqiEvalNegativeValue(value),
+      positiveValue: getXiangqiEvalPositiveValue(value),
+      scoreText:
+        terminalMateSign !== null
+          ? `${terminalMateSign > 0 ? "+" : "-"}M0`
+          : evaluation?.label ?? "-",
       value,
       path,
     };
   });
 }
 
+function buildXiangqiEvalChartRenderData(
+  data: XiangqiEvalChartPoint[],
+  chartDomain: [number, number],
+): XiangqiEvalChartPoint[] {
+  const chartData: XiangqiEvalChartPoint[] = [];
+  let previous: XiangqiEvalChartPoint | null = null;
+
+  for (const rawPoint of data) {
+    const point = resolveXiangqiEvalChartPoint(rawPoint, chartDomain);
+    const zeroCrossing = previous ? getXiangqiEvalZeroCrossing(previous, point) : null;
+    if (zeroCrossing) {
+      chartData.push(zeroCrossing);
+    }
+    chartData.push(point);
+    previous = point;
+  }
+
+  return chartData;
+}
+
+function resolveXiangqiEvalChartPoint(
+  point: XiangqiEvalChartPoint,
+  [min, max]: [number, number],
+): XiangqiEvalChartPoint {
+  if (point.mateSign === null) return point;
+
+  const value = point.mateSign > 0 ? max : min;
+  return {
+    ...point,
+    negativeValue: getXiangqiEvalNegativeValue(value),
+    positiveValue: getXiangqiEvalPositiveValue(value),
+    value,
+  };
+}
+
+function getXiangqiTerminalReportMateSign(position: XiangqiPosition): -1 | 1 | null {
+  if (!isCheckmate(position)) return null;
+  return position.turn === "red" ? -1 : 1;
+}
+
+function getXiangqiChartSign(value: number): -1 | 1 {
+  return value < 0 ? -1 : 1;
+}
+
+function getXiangqiEvalZeroCrossing(
+  previous: XiangqiEvalChartPoint,
+  next: XiangqiEvalChartPoint,
+): XiangqiEvalChartPoint | null {
+  if (previous.value === null || next.value === null) return null;
+  if (sameXiangqiChartValue(previous.value, 0) || sameXiangqiChartValue(next.value, 0)) return null;
+  if (Math.sign(previous.value) === Math.sign(next.value)) return null;
+
+  const distance =
+    Math.abs(previous.value) / (Math.abs(previous.value) + Math.abs(next.value));
+  const x = previous.x + (next.x - previous.x) * distance;
+
+  return {
+    x,
+    mateSign: null,
+    name: `${previous.name}-${next.name}-0`,
+    move: "",
+    negativeValue: 0,
+    positiveValue: 0,
+    scoreText: "0",
+    value: 0,
+    path: null,
+    synthetic: true,
+  };
+}
+
+function getXiangqiEvalPositiveValue(value: number | null): number | null {
+  return value !== null && value >= 0 ? value : null;
+}
+
+function getXiangqiEvalNegativeValue(value: number | null): number | null {
+  return value !== null && value <= 0 ? value : null;
+}
+
+function getXiangqiEvalChartXDomain(data: XiangqiEvalChartPoint[]): [number, number] {
+  if (data.length <= 1) return [0, 1];
+  return [0, data[data.length - 1].x];
+}
+
+function findNearestXiangqiEvalChartPoint(
+  data: XiangqiEvalChartPoint[],
+  x: number,
+): XiangqiEvalChartPoint | null {
+  if (!Number.isFinite(x)) return null;
+
+  return data.reduce<XiangqiEvalChartPoint | null>((nearest, point) => {
+    if (!point.path) return nearest;
+    if (!nearest) return point;
+    return Math.abs(point.x - x) < Math.abs(nearest.x - x) ? point : nearest;
+  }, null);
+}
+
 async function analyzeXiangqiReportPosition(
   engine: LocalEngine,
   fen: string,
+  reportGoMode: XiangqiReportGoMode,
 ): Promise<EngineAnalysis> {
   const settings = ensureXiangqiEngineSettings(engine.settings);
-  // Report generation must terminate for each move, so it uses a bounded pass
-  // even when the live analysis panel defaults to infinite analysis.
-  const normalizedGo = normalizeXiangqiGoMode(engine.go, { t: "Depth", c: 8 });
-  const goMode: XiangqiGoMode =
-    normalizedGo.t === "Infinite" ? { t: "Depth", c: 8 } : normalizedGo;
+  const goMode = normalizeXiangqiReportGoMode(reportGoMode);
   const result = await invoke<EngineAnalysis>("analyze_position", {
     request: buildAnalyzeRequest(engine, fen, {
       requestId: createAnalysisRequestId(engine.id),
@@ -1474,6 +1699,159 @@ async function analyzeXiangqiReportPosition(
   return result;
 }
 
+function XiangqiReportGoModeInput({
+  goMode,
+  setGoMode,
+  disabled,
+}: {
+  goMode: XiangqiReportGoMode;
+  setGoMode: (goMode: XiangqiReportGoMode) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  const normalizedGo = normalizeXiangqiReportGoMode(goMode);
+  const modes = ["Time", "Depth", "Nodes"] as const;
+
+  return (
+    <>
+      <Select
+        w={105}
+        size="xs"
+        label={t("Board.Analysis.GoMode", "Go mode")}
+        allowDeselect={false}
+        disabled={disabled}
+        data={modes.map((value) => ({ value, label: t(`GoMode.${value}`) }))}
+        value={normalizedGo.t}
+        onChange={(value) => setGoMode(defaultXiangqiReportGoMode(value))}
+      />
+      <InputWrapper w={130} label={t(`GoMode.${normalizedGo.t}`)}>
+        {normalizedGo.t === "Time" ? (
+          <TimeInput
+            size="xs"
+            disabled={disabled}
+            defaultType="s"
+            value={normalizedGo.c}
+            setValue={(value) => setGoMode(normalizeXiangqiReportGoMode(value))}
+          />
+        ) : (
+          <NumberInput
+            size="xs"
+            disabled={disabled}
+            min={1}
+            max={normalizedGo.t === "Depth" ? 99 : undefined}
+            value={normalizedGo.c}
+            onChange={(value) =>
+              setGoMode(
+                normalizedGo.t === "Depth"
+                  ? { t: "Depth", c: normalizeXiangqiReportDepth(value) }
+                  : { t: "Nodes", c: normalizeXiangqiReportNodes(value) },
+              )
+            }
+          />
+        )}
+      </InputWrapper>
+    </>
+  );
+}
+
+type XiangqiReportGoMode =
+  | { t: "Time"; c: number }
+  | { t: "Depth"; c: number }
+  | { t: "Nodes"; c: number };
+
+function defaultXiangqiReportGoMode(value: string | null): XiangqiReportGoMode {
+  switch (value) {
+    case "Depth":
+      return { t: "Depth", c: 15 };
+    case "Nodes":
+      return { t: "Nodes", c: 1000000 };
+    case "Time":
+      return { t: "Time", c: 2000 };
+    default:
+      return { t: "Depth", c: 15 };
+  }
+}
+
+function normalizeXiangqiReportGoMode(
+  goMode: GoMode | XiangqiReportGoMode | null | undefined,
+): XiangqiReportGoMode {
+  if (goMode?.t === "Depth") {
+    return { t: "Depth", c: normalizeXiangqiReportDepth(goMode.c) };
+  }
+
+  if (goMode?.t === "Nodes") {
+    return { t: "Nodes", c: normalizeXiangqiReportNodes(goMode.c) };
+  }
+
+  if (goMode?.t === "Time") {
+    const time = Math.trunc(goMode.c || 2000);
+    return { t: "Time", c: Math.max(50, time) };
+  }
+
+  return { t: "Depth", c: 15 };
+}
+
+function normalizeXiangqiReportDepth(value: string | number | null | undefined): number {
+  const depth = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(depth) ? Math.max(1, Math.min(Math.trunc(depth), 99)) : 15;
+}
+
+function normalizeXiangqiReportNodes(value: string | number | null | undefined): number {
+  const nodes = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(nodes) ? Math.max(1, Math.trunc(nodes)) : 1000000;
+}
+
+const XIANGQI_EVAL_CHART_DEFAULT_BOUND = 20;
+const XIANGQI_EVAL_CHART_MATE_BOUND = 100;
+
+function getXiangqiEvalChartDomain(data: XiangqiEvalChartPoint[]): [number, number] {
+  if (data.some((point) => point.mateSign !== null)) {
+    return [-XIANGQI_EVAL_CHART_MATE_BOUND, XIANGQI_EVAL_CHART_MATE_BOUND];
+  }
+
+  const values = data
+    .map((point) => point.value)
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+  const maxAbs = values.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+  const bound = Math.max(XIANGQI_EVAL_CHART_DEFAULT_BOUND, roundXiangqiChartBound(maxAbs));
+  return [-bound, bound];
+}
+
+function getXiangqiEvalChartTicks([min, max]: [number, number]): number[] {
+  const bound = Math.max(Math.abs(min), Math.abs(max));
+  const step = getXiangqiEvalChartTickStep(bound);
+  const ticks = new Set<number>([min, 0, max]);
+  const firstTick = Math.ceil(min / step) * step;
+
+  for (let value = firstTick; value <= max; value += step) {
+    ticks.add(value);
+  }
+
+  return [...ticks].sort((a, b) => a - b);
+}
+
+function formatXiangqiEvalChartTick(value: string | number, [min, max]: [number, number]): string {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number)) return "";
+  return sameXiangqiChartValue(number, min) ||
+    sameXiangqiChartValue(number, 0) ||
+    sameXiangqiChartValue(number, max)
+    ? String(number)
+    : "";
+}
+
+function roundXiangqiChartBound(value: number): number {
+  return Math.ceil(Math.abs(value) / 5) * 5;
+}
+
+function getXiangqiEvalChartTickStep(bound: number): number {
+  return Math.max(5, Math.ceil(bound / 4 / 5) * 5);
+}
+
+function sameXiangqiChartValue(left: number, right: number): boolean {
+  return Math.abs(left - right) < 1e-9;
+}
+
 function XiangqiEvalChartTooltip({
   active,
   payload,
@@ -1483,6 +1861,7 @@ function XiangqiEvalChartTooltip({
 }) {
   if (!active || !payload?.[0]) return null;
   const point = payload[0].payload;
+  if (point.synthetic) return null;
   return (
     <Paper shadow="md" withBorder p="xs">
       <Text size="sm" fw={700}>
@@ -1863,6 +2242,30 @@ function convertXiangqiLogs(logs: string[]): EngineLog[] {
 
 function PreviewBoard({ fen }: { fen: string }) {
   const position = useMemo(() => parseFen(fen), [fen]);
+  const boardTheme = useAtomValue(boardImageAtom);
+  const customBoardCalibration = useAtomValue(customBoardCalibrationAtom);
+  const customBoardImage = useAtomValue(customBoardImageAtom);
+  const pieceStyle = useAtomValue(pieceSetAtom);
+  const customPieceDirectory = useAtomValue(customPieceDirectoryAtom);
+  const customPieceScale = useAtomValue(customPieceScaleAtom);
+  const customPieceThemeConfirmed = useAtomValue(customPieceThemeConfirmedAtom);
+  const customPieceTheme = useCustomXiangqiPieces(
+    pieceStyle === "custom-svg",
+    customPieceDirectory || undefined,
+  );
+  const customBoardUrl =
+    boardTheme === "custom-png" && customBoardImage
+      ? getCustomBoardImageUrl(customBoardImage)
+      : undefined;
+  const resolvedBoardTheme =
+    boardTheme === "custom-png" && !customBoardUrl ? "classic" : boardTheme;
+  const useCustomPieces =
+    pieceStyle === "custom-svg" &&
+    customPieceThemeConfirmed &&
+    customPieceTheme.checkedDirs.length > 0 &&
+    !customPieceTheme.loading &&
+    customPieceTheme.missing.length === 0;
+
   return (
     <Box style={{ width: 220 }}>
       <XiangqiBoard
@@ -1870,8 +2273,12 @@ function PreviewBoard({ fen }: { fen: string }) {
         selected={null}
         lastMove={null}
         orientation="red"
-        boardTheme="classic"
-        pieceStyle="classic"
+        boardTheme={resolvedBoardTheme}
+        pieceStyle={useCustomPieces ? "custom-svg" : "classic"}
+        customBoardImageUrl={customBoardUrl}
+        customBoardCalibration={customBoardCalibration}
+        customPieceUrls={useCustomPieces ? customPieceTheme.urls : undefined}
+        customPieceScale={customPieceScale}
         showDests={false}
         showLastMove={false}
         moveMethod="select"

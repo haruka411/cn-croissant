@@ -1,7 +1,7 @@
 import type { XiangqiColor } from "./xiangqi";
 
 const XIANGQI_SCORE_CP_CEILING = 1000;
-const XIANGQI_MATE_EVAL_CEILING = 1200;
+const XIANGQI_MATE_EVAL_CEILING = 10000;
 const WIN_CHANCE_FACTOR = 0.00368208;
 
 type ParsedXiangqiScore = {

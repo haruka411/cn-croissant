@@ -30,5 +30,9 @@ describe("xiangqi evaluation", () => {
       redCentipawns: -50,
       label: "-0.50",
     });
+    expect(parseXiangqiEvaluation("mate -2", "red")).toEqual({
+      redCentipawns: -10000,
+      label: "-M2",
+    });
   });
 });

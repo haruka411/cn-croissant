@@ -51,7 +51,10 @@ export function customPieceKey(color: XiangqiColor, role: XiangqiRole): CustomPi
     return `${color}-${role}`;
 }
 
-export function useCustomXiangqiPieces(enabled: boolean): CustomPieceThemeState {
+export function useCustomXiangqiPieces(
+    enabled: boolean,
+    preferredDir?: string,
+): CustomPieceThemeState {
     const [state, setState] = useState<CustomPieceThemeState>(() =>
         enabled ? loadingState : emptyState,
     );
@@ -67,7 +70,7 @@ export function useCustomXiangqiPieces(enabled: boolean): CustomPieceThemeState 
 
             setState((current) => ({ ...current, loading: true }));
             try {
-                const theme = await loadCustomXiangqiPieceTheme();
+                const theme = await loadCustomXiangqiPieceTheme(preferredDir);
                 if (!cancelled) setState({ ...theme, loading: false });
             } catch {
                 if (!cancelled) setState({ ...emptyState, loading: false });
@@ -77,21 +80,21 @@ export function useCustomXiangqiPieces(enabled: boolean): CustomPieceThemeState 
         return () => {
             cancelled = true;
         };
-    }, [enabled]);
+    }, [enabled, preferredDir]);
 
     return state;
 }
 
-export async function openCustomXiangqiPieceFolder(): Promise<string> {
-    const dir = await ensureCustomPieceDir();
+export async function openCustomXiangqiPieceFolder(preferredDir?: string): Promise<string> {
+    const dir = preferredDir || (await ensureCustomPieceDir());
     await openPath(dir);
     return dir;
 }
 
-export async function loadCustomXiangqiPieceTheme(): Promise<
-    Omit<CustomPieceThemeState, "loading">
-> {
-    const dirs = await customPieceDirCandidates();
+export async function loadCustomXiangqiPieceTheme(
+    preferredDir?: string,
+): Promise<Omit<CustomPieceThemeState, "loading">> {
+    const dirs = await customPieceDirCandidates(preferredDir);
     const checkedDirs: string[] = [];
     let bestResult: Omit<CustomPieceThemeState, "loading"> | null = null;
 
@@ -143,7 +146,9 @@ async function ensureCustomPieceDir(): Promise<string> {
     return dir;
 }
 
-async function customPieceDirCandidates(): Promise<string[]> {
+async function customPieceDirCandidates(preferredDir?: string): Promise<string[]> {
+    if (preferredDir) return [preferredDir];
+
     const dirs = [
         await join(await resourceDir(), CUSTOM_PIECE_FOLDER_NAME),
         await join(".", CUSTOM_PIECE_FOLDER_NAME),
