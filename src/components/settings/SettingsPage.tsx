@@ -117,7 +117,6 @@ function SettingRow({
 
 export default function Page() {
   const { t, i18n } = useTranslation();
-  const isChinese = i18n.language.startsWith("zh");
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -353,20 +352,16 @@ export default function Page() {
       {
         id: "piece-set",
         category: "appearance",
-        title: isChinese ? "棋子样式" : "Xiangqi Pieces",
-        description: isChinese
-          ? "选择中国象棋棋子的显示样式；选择“自定义 SVG”后可指定 SVG 文件夹"
-          : "Choose the Xiangqi piece style; choose Custom SVG to set an SVG folder",
+        title: t("Settings.Pieces"),
+        description: t("Settings.Pieces.Desc"),
         keywords: ["piece", "xiangqi", "style", "svg", "custom"],
         render: () => <PiecesSelect />,
       },
       {
         id: "board-image",
         category: "appearance",
-        title: isChinese ? "棋盘主题" : "Xiangqi Board",
-        description: isChinese
-          ? "选择中国象棋棋盘主题，或使用自定义 PNG 棋盘文件夹"
-          : "Choose the Xiangqi board theme or use a custom PNG board folder",
+        title: t("Settings.Board.Theme"),
+        description: t("Settings.Board.Theme.Desc"),
         keywords: ["board", "xiangqi", "theme", "png", "custom", "folder"],
         render: () => <BoardSelect />,
       },
@@ -482,7 +477,6 @@ export default function Page() {
     [
       t,
       i18n,
-      isChinese,
       moveMethod,
       showCoordinates,
       isNative,

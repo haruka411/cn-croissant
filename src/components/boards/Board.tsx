@@ -153,11 +153,15 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     customPieceWarningShownRef.current = true;
     notifications.show({
       color: "red",
-      title: "自定义 SVG 棋子不完整",
-      message: `已检查：${customPieceTheme.checkedDirs.join("；")}。请补齐文件：${customPieceTheme.missing.join("、")}`,
+      title: t("Settings.Pieces.CustomSvg.Incomplete"),
+      message: t("Settings.Pieces.CustomSvg.Incomplete.Desc", {
+        dirs: customPieceTheme.checkedDirs.join("; "),
+        files: customPieceTheme.missing.join(", "),
+      }),
     });
   }, [
     pieceStyle,
+    t,
     customPieceThemeConfirmed,
     customPieceTheme.loading,
     customPieceThemeChecked,
@@ -238,7 +242,7 @@ function Board({ editingMode, viewOnly, boardRef, whiteTime, blackTime, onMove }
     }
     if (engineEvaluation?.pending || engineEvaluation?.fen !== currentNode.fen) return;
     setDisplayedEngineEval(null);
-  }, [currentNode.fen, engineEval, engineEvaluation?.fen, engineEvaluation?.pending]);
+  }, [currentNode.fen, engineEval, engineEvaluation, engineEvaluation?.fen, engineEvaluation?.pending]);
 
   const evalFill = displayedEngineEval ? scoreToEvalFill(displayedEngineEval.redCentipawns) : 50;
   const drawnShapes = currentNode.shapes ?? [];

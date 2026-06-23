@@ -46,6 +46,7 @@ const loadingState: CustomPieceThemeState = {
     ...emptyState,
     loading: true,
 };
+const customPieceThemeCache = new Map<string, Promise<Omit<CustomPieceThemeState, "loading">>>();
 
 export function customPieceKey(color: XiangqiColor, role: XiangqiRole): CustomPieceKey {
     return `${color}-${role}`;
@@ -54,6 +55,7 @@ export function customPieceKey(color: XiangqiColor, role: XiangqiRole): CustomPi
 export function useCustomXiangqiPieces(
     enabled: boolean,
     preferredDir?: string,
+    reloadToken = 0,
 ): CustomPieceThemeState {
     const [state, setState] = useState<CustomPieceThemeState>(() =>
         enabled ? loadingState : emptyState,
@@ -80,7 +82,7 @@ export function useCustomXiangqiPieces(
         return () => {
             cancelled = true;
         };
-    }, [enabled, preferredDir]);
+    }, [enabled, preferredDir, reloadToken]);
 
     return state;
 }
@@ -93,8 +95,31 @@ export async function openCustomXiangqiPieceFolder(preferredDir?: string): Promi
 
 export async function loadCustomXiangqiPieceTheme(
     preferredDir?: string,
+    options: { forceReload?: boolean } = {},
 ): Promise<Omit<CustomPieceThemeState, "loading">> {
     const dirs = await customPieceDirCandidates(preferredDir);
+    const cacheKey = dirs.join("\n");
+    if (options.forceReload) customPieceThemeCache.delete(cacheKey);
+
+    const cachedTheme = customPieceThemeCache.get(cacheKey);
+    if (cachedTheme) return cachedTheme;
+
+    const themePromise = loadCustomXiangqiPieceThemeFromCandidates(dirs)
+        .then((theme) => {
+            if (theme.missing.length > 0) customPieceThemeCache.delete(cacheKey);
+            return theme;
+        })
+        .catch((error) => {
+            customPieceThemeCache.delete(cacheKey);
+            throw error;
+        });
+    customPieceThemeCache.set(cacheKey, themePromise);
+    return themePromise;
+}
+
+async function loadCustomXiangqiPieceThemeFromCandidates(
+    dirs: string[],
+): Promise<Omit<CustomPieceThemeState, "loading">> {
     const checkedDirs: string[] = [];
     let bestResult: Omit<CustomPieceThemeState, "loading"> | null = null;
 

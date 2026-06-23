@@ -30,6 +30,7 @@ import { useElementSize } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   boardImageAtom,
   customBoardCalibrationAtom,
@@ -87,6 +88,7 @@ const FIRST_PUZZLE = PUZZLES[0];
 type TrainerStatus = "idle" | "loading" | "ready" | "correct" | "wrong" | "finished" | "error";
 
 export default function XiangqiPuzzleTrainer() {
+  const { t } = useTranslation();
   const [puzzleIndex, setPuzzleIndex] = useState(0);
   const [initialFen, setInitialFen] = useState(FIRST_PUZZLE.fen);
   const [fenInput, setFenInput] = useState(FIRST_PUZZLE.fen);
@@ -174,11 +176,15 @@ export default function XiangqiPuzzleTrainer() {
     customPieceWarningShownRef.current = true;
     notifications.show({
       color: "red",
-      title: "自定义 SVG 棋子不完整",
-      message: `已检查：${customPieceTheme.checkedDirs.join("；")}。请补齐文件：${customPieceTheme.missing.join("、")}`,
+      title: t("Settings.Pieces.CustomSvg.Incomplete"),
+      message: t("Settings.Pieces.CustomSvg.Incomplete.Desc", {
+        dirs: customPieceTheme.checkedDirs.join("; "),
+        files: customPieceTheme.missing.join(", "),
+      }),
     });
   }, [
     pieceStyle,
+    t,
     customPieceThemeConfirmed,
     customPieceTheme.loading,
     customPieceThemeChecked,

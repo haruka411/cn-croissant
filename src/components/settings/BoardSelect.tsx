@@ -15,7 +15,8 @@ import { notifications } from "@mantine/notifications";
 import { IconFolderOpen, IconRefresh, IconRestore } from "@tabler/icons-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAtom } from "jotai";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   boardImageAtom,
   customBoardCalibrationAtom,
@@ -32,18 +33,17 @@ import {
   type CustomBoardImage,
 } from "@/xiangqi/customBoardTheme";
 
-const boardThemes: { label: string; value: XiangqiBoardTheme; colors: [string, string, string] }[] =
-  [
-    { label: "经典木纹", value: "classic", colors: ["#d8a762", "#b77b3e", "#351b0c"] },
-    { label: "青玉", value: "jade", colors: ["#b9d4ba", "#7da781", "#183c30"] },
-    { label: "夜色", value: "dark", colors: ["#303843", "#1e252e", "#d3c3a4"] },
-    { label: "宣纸", value: "parchment", colors: ["#ead29a", "#c39152", "#57310f"] },
-    { label: "胡桃木", value: "walnut", colors: ["#8e5a30", "#4e2e1a", "#f1d8a4"] },
-    { label: "青花瓷", value: "porcelain", colors: ["#d8e6ef", "#7fa8bf", "#1f4f75"] },
-    { label: "石砚", value: "slate", colors: ["#7f8581", "#4f5654", "#181f1e"] },
-    { label: "水晶", value: "crystal", colors: ["#fbfeff", "#c9f0fb", "#2c8db5"] },
-    { label: "标准 PNG", value: "custom-png", colors: ["#f8fafc", "#d1d5db", "#374151"] },
-  ];
+const boardThemes: { value: XiangqiBoardTheme; colors: [string, string, string] }[] = [
+  { value: "classic", colors: ["#d8a762", "#b77b3e", "#351b0c"] },
+  { value: "jade", colors: ["#b9d4ba", "#7da781", "#183c30"] },
+  { value: "dark", colors: ["#303843", "#1e252e", "#d3c3a4"] },
+  { value: "parchment", colors: ["#ead29a", "#c39152", "#57310f"] },
+  { value: "walnut", colors: ["#8e5a30", "#4e2e1a", "#f1d8a4"] },
+  { value: "porcelain", colors: ["#d8e6ef", "#7fa8bf", "#1f4f75"] },
+  { value: "slate", colors: ["#7f8581", "#4f5654", "#181f1e"] },
+  { value: "crystal", colors: ["#fbfeff", "#c9f0fb", "#2c8db5"] },
+  { value: "custom-png", colors: ["#f8fafc", "#d1d5db", "#374151"] },
+];
 
 function ThemePreview({
   colors,
@@ -83,13 +83,23 @@ function ThemePreview({
 }
 
 export default function BoardSelect() {
+  const { t } = useTranslation();
   const [board, setBoard] = useAtom(boardImageAtom);
   const [customBoardDirectory, setCustomBoardDirectory] = useAtom(customBoardDirectoryAtom);
   const [customBoardImage, setCustomBoardImage] = useAtom(customBoardImageAtom);
   const [customBoardCalibration, setCustomBoardCalibration] = useAtom(customBoardCalibrationAtom);
   const [customBoards, setCustomBoards] = useState<CustomBoardImage[]>([]);
   const [loadingCustomBoards, setLoadingCustomBoards] = useState(false);
+  const loadedCustomBoardDirectoryRef = useRef<string | null>(null);
   const selected = boardThemes.find((item) => item.value === board) ?? boardThemes[0];
+  const boardThemeOptions = useMemo(
+    () =>
+      boardThemes.map((item) => ({
+        ...item,
+        label: t(`Settings.Board.Theme.${item.value}`),
+      })),
+    [t],
+  );
   const selectedCustomBoard = customBoards.find((item) => item.path === customBoardImage);
   const selectedCustomBoardUrl = customBoardImage
     ? (selectedCustomBoard?.url ?? customBoardImageUrl(customBoardImage))
@@ -110,16 +120,24 @@ export default function BoardSelect() {
 
     void (async () => {
       if (!customBoardDirectory) {
+        loadedCustomBoardDirectoryRef.current = null;
         setCustomBoards([]);
         return;
       }
+      if (loadedCustomBoardDirectoryRef.current === customBoardDirectory) return;
 
       setLoadingCustomBoards(true);
       try {
         const images = await loadCustomBoardImages(customBoardDirectory);
-        if (!cancelled) setCustomBoards(images);
+        if (!cancelled) {
+          loadedCustomBoardDirectoryRef.current = customBoardDirectory;
+          setCustomBoards(images);
+        }
       } catch {
-        if (!cancelled) setCustomBoards([]);
+        if (!cancelled) {
+          loadedCustomBoardDirectoryRef.current = customBoardDirectory;
+          setCustomBoards([]);
+        }
       } finally {
         if (!cancelled) setLoadingCustomBoards(false);
       }
@@ -134,12 +152,13 @@ export default function BoardSelect() {
     setLoadingCustomBoards(true);
     try {
       const images = await loadCustomBoardImages(dir);
+      loadedCustomBoardDirectoryRef.current = dir;
       setCustomBoards(images);
       if (images.length === 0) {
         notifications.show({
           color: "yellow",
-          title: "未找到标准 PNG 棋盘",
-          message: "该文件夹中没有 PNG 文件。",
+          title: t("Settings.Board.CustomPng.NotFound"),
+          message: t("Settings.Board.CustomPng.NotFound.Desc"),
         });
         return;
       }
@@ -152,8 +171,8 @@ export default function BoardSelect() {
     } catch {
       notifications.show({
         color: "red",
-        title: "无法读取标准 PNG 棋盘",
-        message: "请确认选择的文件夹可读取。",
+        title: t("Settings.Board.CustomPng.ReadFailed"),
+        message: t("Settings.Board.CustomPng.ReadFailed.Desc"),
       });
     } finally {
       setLoadingCustomBoards(false);
@@ -177,7 +196,7 @@ export default function BoardSelect() {
       <Select
         allowDeselect={false}
         w="13rem"
-        data={boardThemes.map((item) => ({
+        data={boardThemeOptions.map((item) => ({
           value: item.value,
           label: item.label,
         }))}
@@ -195,7 +214,7 @@ export default function BoardSelect() {
           setBoard(value as XiangqiBoardTheme);
         }}
         renderOption={({ option }) => {
-          const item = boardThemes.find((theme) => theme.value === option.value)!;
+          const item = boardThemeOptions.find((theme) => theme.value === option.value)!;
           const imageUrl = item.value === "custom-png" ? selectedCustomBoardUrl : undefined;
           return (
             <Group wrap="nowrap">
@@ -215,7 +234,11 @@ export default function BoardSelect() {
               flex={1}
               data={customBoardOptions}
               value={customBoardImage || null}
-              placeholder={loadingCustomBoards ? "正在扫描 PNG" : "选择 PNG"}
+              placeholder={
+                loadingCustomBoards
+                  ? t("Settings.Board.CustomPng.Scanning")
+                  : t("Settings.Board.CustomPng.Select")
+              }
               disabled={loadingCustomBoards || customBoardOptions.length === 0}
               onChange={(value) => {
                 if (!value) return;
@@ -230,12 +253,12 @@ export default function BoardSelect() {
               onClick={() => void chooseCustomBoardDirectory()}
               disabled={loadingCustomBoards}
             >
-              文件夹
+              {t("Common.Folder")}
             </Button>
-            <Tooltip label="刷新">
+            <Tooltip label={t("Common.Refresh")}>
               <ActionIcon
                 variant="default"
-                aria-label="刷新标准 PNG 棋盘"
+                aria-label={t("Settings.Board.CustomPng.Refresh")}
                 disabled={!customBoardDirectory || loadingCustomBoards}
                 onClick={() => void loadCustomBoardDirectory(customBoardDirectory, false)}
               >
@@ -249,16 +272,16 @@ export default function BoardSelect() {
             </Text>
           )}
           <Text size="xs" c="dimmed">
-            PNG 棋盘按图像中心对齐，预设尺寸 767x842，棋子间距 68；其它尺寸按高度等比例缩放。
+            {t("Settings.Board.CustomPng.Desc")}
           </Text>
           <Group justify="space-between" align="center" wrap="nowrap">
             <Text size="xs" fw={600}>
-              棋盘校准
+              {t("Settings.Board.Calibration")}
             </Text>
-            <Tooltip label="恢复默认">
+            <Tooltip label={t("Common.Reset")}>
               <ActionIcon
                 variant="subtle"
-                aria-label="恢复默认棋盘校准"
+                aria-label={t("Settings.Board.Calibration.Reset")}
                 onClick={() => setCustomBoardCalibration(DEFAULT_CUSTOM_BOARD_CALIBRATION)}
               >
                 <IconRestore size="1rem" />
@@ -274,15 +297,15 @@ export default function BoardSelect() {
               })
             }
             data={[
-              { label: "标准", value: "standard" },
-              { label: "比例", value: "scale" },
-              { label: "手动", value: "manual" },
+              { label: t("Settings.Board.Calibration.Standard"), value: "standard" },
+              { label: t("Settings.Board.Calibration.Scale"), value: "scale" },
+              { label: t("Settings.Board.Calibration.Manual"), value: "manual" },
             ]}
           />
           {customBoardCalibration.mode === "scale" && (
             <NumberInput
               size="xs"
-              label="比例"
+              label={t("Settings.Board.Calibration.Scale")}
               suffix="%"
               min={10}
               max={500}

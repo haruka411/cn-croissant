@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -96,6 +97,7 @@ const CUSTOM_PNG_BOARD_LAYOUT: BoardLayout = {
   height: (9 * CUSTOM_BOARD_REFERENCE_CELL_SIZE * 100) / CUSTOM_BOARD_REFERENCE_HEIGHT,
 };
 const DRAW_BRUSH_SEQUENCE: XiangqiDrawBrush[] = ["green", "red", "blue", "yellow"];
+const customBoardImageSizeCache = new Map<string, { width: number; height: number }>();
 const DRAW_BRUSHES: Record<
   XiangqiDrawBrush,
   { key: string; color: string; opacity: number; lineWidth: number }
@@ -243,7 +245,7 @@ export function XiangqiBoard({
     height: number;
   } | null>(null);
   const suppressClick = useRef(false);
-  const dests = legalDests(position);
+  const dests = useMemo(() => legalDests(position), [position]);
   const selectedDests = selected ? (dests.get(selected) ?? []) : [];
   const visibleShapes = drawing
     ? [
@@ -276,14 +278,22 @@ export function XiangqiBoard({
       return;
     }
 
+    const cachedSize = customBoardImageSizeCache.get(customBoardImageUrl);
+    if (cachedSize) {
+      setCustomBoardImageSize(cachedSize);
+      return;
+    }
+
     let cancelled = false;
     const image = new Image();
     image.onload = () => {
       if (cancelled || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
-      setCustomBoardImageSize({
+      const size = {
         width: image.naturalWidth,
         height: image.naturalHeight,
-      });
+      };
+      customBoardImageSizeCache.set(customBoardImageUrl, size);
+      setCustomBoardImageSize(size);
     };
     image.onerror = () => {
       if (!cancelled) setCustomBoardImageSize(null);

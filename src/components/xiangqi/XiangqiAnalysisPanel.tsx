@@ -103,24 +103,32 @@ import { formatXiangqiMove } from "@/xiangqi/notation";
 import {
   formatXiangqiScore,
   isPositiveXiangqiScore,
-  parseXiangqiEvaluation,
-  parseXiangqiScore,
   scoreToXiangqiWinChance,
 } from "@/xiangqi/evaluation";
 import {
   applyMove,
   isCheckmate,
+  legalMoves,
   makeFen,
   opposite,
   parseFen,
   parseUciMove,
-  traverseMainline,
-  type GameNode,
   type Square,
   type XiangqiDrawShape,
   type XiangqiMove,
   type XiangqiPosition,
 } from "@/xiangqi/xiangqi";
+import {
+  buildXiangqiEvalChartData,
+  buildXiangqiEvalChartRenderData,
+  buildXiangqiReportNodes,
+  findNearestXiangqiEvalChartPoint,
+  formatXiangqiEvalChartTick,
+  getXiangqiEvalChartDomain,
+  getXiangqiEvalChartTicks,
+  getXiangqiEvalChartXDomain,
+  type XiangqiEvalChartPoint,
+} from "@/xiangqi/reportChart";
 import { useXiangqiStore } from "@/xiangqi/store";
 import { XiangqiBoard } from "@/xiangqi/XiangqiBoard";
 import { customBoardImageUrl as getCustomBoardImageUrl } from "@/xiangqi/customBoardTheme";
@@ -140,6 +148,8 @@ type EngineAnalysis = {
   lines: EngineLine[];
   logs: string[];
 };
+
+const EMPTY_XIANGQI_REPORT_SCORES: Record<string, string> = {};
 
 type EngineResult = {
   fen: string;
@@ -168,6 +178,7 @@ type XiangqiAnalysisContextValue = {
   reorderEngines: (sourceIndex: number, destinationIndex: number) => void;
   activeResults: Record<string, EngineResult>;
   analysisFen: string;
+  canAnalyzePosition: boolean;
   threatMode: boolean;
   setThreatMode: React.Dispatch<React.SetStateAction<boolean>>;
   pinnedEngineIds: string[];
@@ -222,6 +233,10 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
     [effectiveLoadedEngines],
   );
   const analysisFen = useMemo(() => (threatMode ? swapXiangqiTurn(fen) : fen), [fen, threatMode]);
+  const canAnalyzePosition = useMemo(
+    () => hasLegalXiangqiMoves(fen) && hasLegalXiangqiMoves(analysisFen),
+    [analysisFen, fen],
+  );
   const orderedEngines = useMemo(
     () =>
       [...loadedEngines].sort((a, b) => {
@@ -257,7 +272,6 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
           candidate.id === engineId && candidate.type === "local"
             ? {
                 ...candidate,
-                enabled: nextSettings.enabled,
                 go: nextSettings.go,
                 settings: nextSettings.settings,
               }
@@ -271,8 +285,11 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    if (activeEngines.length === 0) {
+    if (activeEngines.length === 0 || !canAnalyzePosition) {
       setResults({});
+      if (!canAnalyzePosition) {
+        void stopXiangqiAnalysis();
+      }
       return;
     }
 
@@ -343,7 +360,7 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
       cancelled = true;
       unlisten?.();
     };
-  }, [activeEngines, analysisFen]);
+  }, [activeEngines, analysisFen, canAnalyzePosition]);
 
   useEffect(() => {
     if (!showArrows) {
@@ -374,7 +391,7 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
   }, [activeEngines, orderedEngines, results, setEngineArrows, showArrows, showConsecutiveArrows]);
 
   useEffect(() => {
-    if (activeEngines.length === 0) {
+    if (activeEngines.length === 0 || !canAnalyzePosition) {
       setEvaluation(null);
       return () => setEvaluation(null);
     }
@@ -395,7 +412,7 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
     setEvaluation(pending ? { fen: analysisFen, pending: true, score: null } : null);
 
     return () => setEvaluation(null);
-  }, [activeEngines, analysisFen, results, setEvaluation]);
+  }, [activeEngines, analysisFen, canAnalyzePosition, results, setEvaluation]);
 
   const context = useMemo<XiangqiAnalysisContextValue>(
     () => ({
@@ -409,6 +426,7 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
       },
       activeResults: results,
       analysisFen,
+      canAnalyzePosition,
       threatMode,
       setThreatMode,
       pinnedEngineIds,
@@ -424,6 +442,7 @@ export function XiangqiAnalysisProvider({ children }: { children: React.ReactNod
     }),
     [
       analysisFen,
+      canAnalyzePosition,
       effectiveLoadedEngines,
       engineSettingsOverrides,
       loadedEngines,
@@ -479,6 +498,7 @@ function XiangqiAnalysisPanel() {
     reorderEngines,
     activeResults,
     analysisFen,
+    canAnalyzePosition,
     threatMode,
     setThreatMode,
     pinnedEngineIds,
@@ -526,6 +546,7 @@ function XiangqiAnalysisPanel() {
             reorderEngines={reorderEngines}
             activeResults={activeResults}
             analysisFen={analysisFen}
+            canAnalyzePosition={canAnalyzePosition}
             threatMode={threatMode}
             pinnedEngineIds={pinnedEngineIds}
             setThreatMode={setThreatMode}
@@ -572,6 +593,7 @@ function XiangqiEnginesPanel({
   reorderEngines,
   activeResults,
   analysisFen,
+  canAnalyzePosition,
   threatMode,
   pinnedEngineIds,
   setThreatMode,
@@ -587,6 +609,7 @@ function XiangqiEnginesPanel({
   reorderEngines: (sourceIndex: number, destinationIndex: number) => void;
   activeResults: Record<string, EngineResult>;
   analysisFen: string;
+  canAnalyzePosition: boolean;
   threatMode: boolean;
   pinnedEngineIds: string[];
   setThreatMode: React.Dispatch<React.SetStateAction<boolean>>;
@@ -682,6 +705,7 @@ function XiangqiEnginesPanel({
                               engine={effectiveEngine}
                               result={result}
                               fen={analysisFen}
+                              canAnalyzePosition={canAnalyzePosition}
                               threatMode={threatMode}
                               pinned={pinnedEngineIds.includes(engine.id)}
                               color={ENGINE_ARROW_COLORS[index % ENGINE_ARROW_COLORS.length]}
@@ -790,6 +814,7 @@ function EngineAnalysisCard({
   engine,
   result,
   fen,
+  canAnalyzePosition,
   threatMode,
   pinned,
   color,
@@ -804,6 +829,7 @@ function EngineAnalysisCard({
   engine: LocalEngine;
   result: EngineResult | undefined;
   fen: string;
+  canAnalyzePosition: boolean;
   threatMode: boolean;
   pinned: boolean;
   color: string;
@@ -821,6 +847,7 @@ function EngineAnalysisCard({
   const bestLine = lines[0];
   const expectedLines = Math.max(1, getNumericSetting(settings.settings, "MultiPV", 2));
   const progress = Math.max(0, Math.min(result?.progress ?? 0, 100));
+  const isRunning = settings.enabled && canAnalyzePosition;
 
   return (
     <Paper
@@ -838,15 +865,17 @@ function EngineAnalysisCard({
         </ActionIcon>
         <ActionIcon
           color={color}
-          variant={settings.enabled ? "filled" : "default"}
+          variant={isRunning ? "filled" : "default"}
           size="lg"
           radius="sm"
+          disabled={!canAnalyzePosition}
           onClick={() => {
+            if (!canAnalyzePosition) return;
             if (result?.loading) void stopXiangqiAnalysis(result.requestId);
             setSettings((previous) => ({ ...previous, enabled: !previous.enabled }));
           }}
         >
-          {settings.enabled ? <IconPlayerPause size="1rem" /> : <IconPlayerPlay size="1rem" />}
+          {isRunning ? <IconPlayerPause size="1rem" /> : <IconPlayerPlay size="1rem" />}
         </ActionIcon>
         <Text fw={800} flex={1} lineClamp={1}>
           {engine.name}
@@ -903,9 +932,9 @@ function EngineAnalysisCard({
       </Collapse>
 
       <Progress
-        value={settings.enabled ? progress : 0}
-        animated={settings.enabled && !!result?.loading && progress < 100}
-        striped={settings.enabled && !!result?.loading && progress < 100}
+        value={isRunning ? progress : 0}
+        animated={isRunning && !!result?.loading && progress < 100}
+        striped={isRunning && !!result?.loading && progress < 100}
         color={color}
         size="xs"
       />
@@ -931,7 +960,7 @@ function EngineAnalysisCard({
                 />
               ))}
             {lines.length === 0 &&
-              settings.enabled &&
+              isRunning &&
               result?.loading &&
               Array.from({ length: expectedLines }).map((_, index) => (
                 <Table.Tr key={index}>
@@ -940,13 +969,15 @@ function EngineAnalysisCard({
                   </Table.Td>
                 </Table.Tr>
               ))}
-            {lines.length === 0 && (!settings.enabled || !result?.loading) && (
+            {lines.length === 0 && (!isRunning || !result?.loading) && (
               <Table.Tr>
                 <Table.Td colSpan={3}>
                   <Text ta="center" my="lg" size="sm" c="dimmed">
-                    {!settings.enabled
-                      ? t("Board.Analysis.InactiveEngine")
-                      : t("Board.Analysis.NoAnalysisYet")}
+                    {!canAnalyzePosition
+                      ? t("Board.Analysis.TerminalPosition")
+                      : !settings.enabled
+                        ? t("Board.Analysis.InactiveEngine")
+                        : t("Board.Analysis.NoAnalysisYet")}
                   </Text>
                 </Table.Td>
               </Table.Tr>
@@ -1261,7 +1292,7 @@ function XiangqiReportPanel() {
     () => `${currentTab?.value ?? "unknown"}:${root.id}`,
     [currentTab?.value, root.id],
   );
-  const scores = reportScores[reportKey] ?? {};
+  const scores = reportScores[reportKey] ?? EMPTY_XIANGQI_REPORT_SCORES;
   const setScores = useCallback(
     (nextScores: Record<string, string>) =>
       setReportScores((previous) => ({
@@ -1513,172 +1544,13 @@ function XiangqiReportPanel() {
             <Text c="dimmed" size="sm">
               {loadedEngines.length === 0
                 ? t("Board.Analysis.NoLocalXiangqiEngine")
-                : "点击生成报告后，这里会显示局势变化"}
+                : t("Board.Analysis.ReportEmpty")}
             </Text>
           </Stack>
         )}
       </Paper>
     </Stack>
   );
-}
-
-type XiangqiEvalChartPoint = {
-  x: number;
-  name: string;
-  mateSign: -1 | 1 | null;
-  move: string;
-  negativeValue: number | null;
-  positiveValue: number | null;
-  scoreText: string;
-  value: number | null;
-  path: number[] | null;
-  synthetic?: boolean;
-};
-
-type XiangqiReportNode = {
-  node: GameNode;
-  path: number[];
-};
-
-function buildXiangqiReportNodes(root: GameNode): XiangqiReportNode[] {
-  const nodes = traverseMainline(root).slice(1);
-  return nodes.map((node, index) => ({
-    node,
-    path: Array.from({ length: index + 1 }, () => 0),
-  }));
-}
-
-function buildXiangqiEvalChartData(
-  reportNodes: XiangqiReportNode[],
-  scores: Record<string, string>,
-): XiangqiEvalChartPoint[] {
-  return reportNodes.map(({ node, path }, index) => {
-    const position = parseFen(node.fen);
-    const turn = position.turn;
-    const score = scores[node.fen];
-    const terminalMateSign = score ? getXiangqiTerminalReportMateSign(position) : null;
-    const parsedScore = parseXiangqiScore(score);
-    const evaluation = score ? parseXiangqiEvaluation(score, turn) : null;
-    const engineMateSign =
-      parsedScore?.kind === "mate" && evaluation
-        ? getXiangqiChartSign(evaluation.redCentipawns)
-        : null;
-    const mateSign = terminalMateSign ?? engineMateSign;
-    const redCentipawns =
-      mateSign === null && evaluation?.redCentipawns !== undefined ? evaluation.redCentipawns : null;
-    const value = redCentipawns !== null ? redCentipawns / 100 : null;
-
-    return {
-      x: index,
-      mateSign,
-      name: `${index + 1}. ${node.text}`,
-      move: node.text,
-      negativeValue: getXiangqiEvalNegativeValue(value),
-      positiveValue: getXiangqiEvalPositiveValue(value),
-      scoreText:
-        terminalMateSign !== null
-          ? `${terminalMateSign > 0 ? "+" : "-"}M0`
-          : evaluation?.label ?? "-",
-      value,
-      path,
-    };
-  });
-}
-
-function buildXiangqiEvalChartRenderData(
-  data: XiangqiEvalChartPoint[],
-  chartDomain: [number, number],
-): XiangqiEvalChartPoint[] {
-  const chartData: XiangqiEvalChartPoint[] = [];
-  let previous: XiangqiEvalChartPoint | null = null;
-
-  for (const rawPoint of data) {
-    const point = resolveXiangqiEvalChartPoint(rawPoint, chartDomain);
-    const zeroCrossing = previous ? getXiangqiEvalZeroCrossing(previous, point) : null;
-    if (zeroCrossing) {
-      chartData.push(zeroCrossing);
-    }
-    chartData.push(point);
-    previous = point;
-  }
-
-  return chartData;
-}
-
-function resolveXiangqiEvalChartPoint(
-  point: XiangqiEvalChartPoint,
-  [min, max]: [number, number],
-): XiangqiEvalChartPoint {
-  if (point.mateSign === null) return point;
-
-  const value = point.mateSign > 0 ? max : min;
-  return {
-    ...point,
-    negativeValue: getXiangqiEvalNegativeValue(value),
-    positiveValue: getXiangqiEvalPositiveValue(value),
-    value,
-  };
-}
-
-function getXiangqiTerminalReportMateSign(position: XiangqiPosition): -1 | 1 | null {
-  if (!isCheckmate(position)) return null;
-  return position.turn === "red" ? -1 : 1;
-}
-
-function getXiangqiChartSign(value: number): -1 | 1 {
-  return value < 0 ? -1 : 1;
-}
-
-function getXiangqiEvalZeroCrossing(
-  previous: XiangqiEvalChartPoint,
-  next: XiangqiEvalChartPoint,
-): XiangqiEvalChartPoint | null {
-  if (previous.value === null || next.value === null) return null;
-  if (sameXiangqiChartValue(previous.value, 0) || sameXiangqiChartValue(next.value, 0)) return null;
-  if (Math.sign(previous.value) === Math.sign(next.value)) return null;
-
-  const distance =
-    Math.abs(previous.value) / (Math.abs(previous.value) + Math.abs(next.value));
-  const x = previous.x + (next.x - previous.x) * distance;
-
-  return {
-    x,
-    mateSign: null,
-    name: `${previous.name}-${next.name}-0`,
-    move: "",
-    negativeValue: 0,
-    positiveValue: 0,
-    scoreText: "0",
-    value: 0,
-    path: null,
-    synthetic: true,
-  };
-}
-
-function getXiangqiEvalPositiveValue(value: number | null): number | null {
-  return value !== null && value >= 0 ? value : null;
-}
-
-function getXiangqiEvalNegativeValue(value: number | null): number | null {
-  return value !== null && value <= 0 ? value : null;
-}
-
-function getXiangqiEvalChartXDomain(data: XiangqiEvalChartPoint[]): [number, number] {
-  if (data.length <= 1) return [0, 1];
-  return [0, data[data.length - 1].x];
-}
-
-function findNearestXiangqiEvalChartPoint(
-  data: XiangqiEvalChartPoint[],
-  x: number,
-): XiangqiEvalChartPoint | null {
-  if (!Number.isFinite(x)) return null;
-
-  return data.reduce<XiangqiEvalChartPoint | null>((nearest, point) => {
-    if (!point.path) return nearest;
-    if (!nearest) return point;
-    return Math.abs(point.x - x) < Math.abs(nearest.x - x) ? point : nearest;
-  }, null);
 }
 
 async function analyzeXiangqiReportPosition(
@@ -1801,57 +1673,6 @@ function normalizeXiangqiReportNodes(value: string | number | null | undefined):
   return Number.isFinite(nodes) ? Math.max(1, Math.trunc(nodes)) : 1000000;
 }
 
-const XIANGQI_EVAL_CHART_DEFAULT_BOUND = 20;
-const XIANGQI_EVAL_CHART_MATE_BOUND = 100;
-
-function getXiangqiEvalChartDomain(data: XiangqiEvalChartPoint[]): [number, number] {
-  if (data.some((point) => point.mateSign !== null)) {
-    return [-XIANGQI_EVAL_CHART_MATE_BOUND, XIANGQI_EVAL_CHART_MATE_BOUND];
-  }
-
-  const values = data
-    .map((point) => point.value)
-    .filter((value): value is number => value !== null && Number.isFinite(value));
-  const maxAbs = values.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
-  const bound = Math.max(XIANGQI_EVAL_CHART_DEFAULT_BOUND, roundXiangqiChartBound(maxAbs));
-  return [-bound, bound];
-}
-
-function getXiangqiEvalChartTicks([min, max]: [number, number]): number[] {
-  const bound = Math.max(Math.abs(min), Math.abs(max));
-  const step = getXiangqiEvalChartTickStep(bound);
-  const ticks = new Set<number>([min, 0, max]);
-  const firstTick = Math.ceil(min / step) * step;
-
-  for (let value = firstTick; value <= max; value += step) {
-    ticks.add(value);
-  }
-
-  return [...ticks].sort((a, b) => a - b);
-}
-
-function formatXiangqiEvalChartTick(value: string | number, [min, max]: [number, number]): string {
-  const number = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(number)) return "";
-  return sameXiangqiChartValue(number, min) ||
-    sameXiangqiChartValue(number, 0) ||
-    sameXiangqiChartValue(number, max)
-    ? String(number)
-    : "";
-}
-
-function roundXiangqiChartBound(value: number): number {
-  return Math.ceil(Math.abs(value) / 5) * 5;
-}
-
-function getXiangqiEvalChartTickStep(bound: number): number {
-  return Math.max(5, Math.ceil(bound / 4 / 5) * 5);
-}
-
-function sameXiangqiChartValue(left: number, right: number): boolean {
-  return Math.abs(left - right) < 1e-9;
-}
-
 function XiangqiEvalChartTooltip({
   active,
   payload,
@@ -1859,6 +1680,7 @@ function XiangqiEvalChartTooltip({
   active?: boolean;
   payload?: readonly { payload: XiangqiEvalChartPoint }[];
 }) {
+  const { t } = useTranslation();
   if (!active || !payload?.[0]) return null;
   const point = payload[0].payload;
   if (point.synthetic) return null;
@@ -1868,7 +1690,7 @@ function XiangqiEvalChartTooltip({
         {point.move}
       </Text>
       <Text size="xs" c="dimmed">
-        红方视角: {point.scoreText}
+        {t("Board.Analysis.RedPerspective", { score: point.scoreText })}
       </Text>
     </Paper>
   );
@@ -2022,7 +1844,7 @@ function getXiangqiSettings(
   }
 
   return normalizeXiangqiSettings({
-    enabled: engine.enabled ?? false,
+    enabled: false,
     go: normalizeXiangqiGoMode(engine.go),
     settings: engine.settings ?? [],
     synced: true,
@@ -2122,6 +1944,14 @@ function swapXiangqiTurn(fen: string): string {
     const parts = fen.trim().split(/\s+/);
     parts[1] = parts[1] === "b" ? "w" : "b";
     return parts.join(" ");
+  }
+}
+
+function hasLegalXiangqiMoves(fen: string): boolean {
+  try {
+    return legalMoves(parseFen(fen)).length > 0;
+  } catch {
+    return true;
   }
 }
 
