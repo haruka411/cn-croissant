@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
     INITIAL_XIANGQI_FEN,
     applyMove,
@@ -9,8 +9,25 @@ import {
     parseUciMove,
 } from "./xiangqi";
 import { createXiangqiStore } from "./store";
+import { XIANGQI_REPETITION_RULE_STORAGE_KEY, type XiangqiRepetitionRule } from "./rules";
 
 describe("xiangqi rules", () => {
+    beforeEach(() => {
+        localStorage.removeItem(XIANGQI_REPETITION_RULE_STORAGE_KEY);
+    });
+
+    function setRule(rule: XiangqiRepetitionRule) {
+        localStorage.setItem(XIANGQI_REPETITION_RULE_STORAGE_KEY, JSON.stringify(rule));
+    }
+
+    function playMoves(store: ReturnType<typeof createXiangqiStore>, moves: string[]) {
+        for (const text of moves) {
+            const move = parseUciMove(text);
+            expect(move).not.toBeNull();
+            store.getState().makeMove(move!);
+        }
+    }
+
     it("round-trips the initial FEN", () => {
         const position = parseFen(INITIAL_XIANGQI_FEN);
         expect(position.board.size).toBe(32);
@@ -109,16 +126,7 @@ describe("xiangqi rules", () => {
         // Red king on f0 keeps off the kings' file so the flying-general rule never interferes.
         const store = createXiangqiStore();
         store.getState().setFen("4k4/9/9/9/9/9/9/9/3R5/5K3 w - - 0 1");
-        for (const text of [
-            "d1e1", "e9d9",
-            "e1d1", "d9e9",
-            "d1e1", "e9d9",
-            "e1d1", "d9e9",
-        ]) {
-            const move = parseUciMove(text);
-            expect(move).not.toBeNull();
-            store.getState().makeMove(move!);
-        }
+        playMoves(store, ["d1e1", "e9d9", "e1d1", "d9e9", "d1e1", "e9d9", "e1d1", "d9e9"]);
 
         expect(store.getState().headers.result).toBe("0-1");
         expect(store.getState().headers.resultReason).toBe("perpetualCheck");
@@ -127,13 +135,56 @@ describe("xiangqi rules", () => {
     it("adjudicates unresolved threefold repetition as a draw", () => {
         const store = createXiangqiStore();
         store.getState().setFen("r3k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 0 1");
-        for (const text of ["a0a1", "a9a8", "a1a0", "a8a9", "a0a1", "a9a8", "a1a0", "a8a9"]) {
-            const move = parseUciMove(text);
-            expect(move).not.toBeNull();
-            store.getState().makeMove(move!);
-        }
+        playMoves(store, ["a0a1", "a9a8", "a1a0", "a8a9", "a0a1", "a9a8", "a1a0", "a8a9"]);
 
         expect(store.getState().headers.result).toBe("1/2-1/2");
         expect(store.getState().headers.resultReason).toBe("repetition");
+    });
+
+    it("adjudicates AsianRule repetition on the second occurrence", () => {
+        setRule("AsianRule");
+        const store = createXiangqiStore();
+        store.getState().setFen("r3k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 0 1");
+        playMoves(store, ["a0a1", "a9a8", "a1a0", "a8a9"]);
+
+        expect(store.getState().headers.result).toBe("1/2-1/2");
+        expect(store.getState().headers.resultReason).toBe("repetition");
+    });
+
+    it("waits until the third occurrence for ComputerRule repetition", () => {
+        setRule("ComputerRule");
+        const store = createXiangqiStore();
+        store.getState().setFen("r3k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 0 1");
+        playMoves(store, ["a0a1", "a9a8", "a1a0", "a8a9"]);
+
+        expect(store.getState().headers.result).toBe("*");
+        expect(store.getState().headers.resultReason).toBeNull();
+
+        playMoves(store, ["a0a1", "a9a8", "a1a0", "a8a9"]);
+        expect(store.getState().headers.result).toBe("1/2-1/2");
+        expect(store.getState().headers.resultReason).toBe("repetition");
+    });
+
+    it("does not adjudicate repeated positions under NoJudgement", () => {
+        setRule("NoJudgement");
+        const store = createXiangqiStore();
+        store.getState().setFen("r3k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 0 1");
+        playMoves(store, ["a0a1", "a9a8", "a1a0", "a8a9", "a0a1", "a9a8", "a1a0", "a8a9"]);
+
+        expect(store.getState().headers.result).toBe("*");
+        expect(store.getState().headers.resultReason).toBeNull();
+    });
+
+    it("does not apply the 60-move natural draw under YitianRule", () => {
+        setRule("YitianRule");
+        const store = createXiangqiStore();
+        store.getState().setFen("4k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 119 1");
+        const move = parseUciMove("a0a1");
+        expect(move).not.toBeNull();
+
+        store.getState().makeMove(move!);
+
+        expect(store.getState().headers.result).toBe("*");
+        expect(store.getState().headers.resultReason).toBeNull();
     });
 });

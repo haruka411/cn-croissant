@@ -23,6 +23,13 @@ export type XiangqiRepetitionRule =
 
 type Violation = "idle" | "chase" | "check";
 
+type RulePolicy = {
+    repetitionOccurrences: number;
+    chaseLevel: number;
+    chineseProtectedMinorChase: boolean;
+    naturalDraw: boolean;
+};
+
 type RuleOutcome =
     | { type: "draw"; reason: XiangqiResultReason }
     | { type: "loss"; loser: XiangqiColor; reason: XiangqiResultReason }
@@ -72,6 +79,7 @@ export function judgeXiangqiRepetition(
     rule: XiangqiRepetitionRule = currentXiangqiRepetitionRule(),
 ): RuleOutcome {
     if (rule === "NoJudgement") return null;
+    const policy = xiangqiRulePolicy(rule);
 
     const line = nodesAtPath(root, path);
     const current = line.at(-1);
@@ -81,13 +89,19 @@ export function judgeXiangqiRepetition(
     const occurrences = line
         .map((node, index) => ({ index, key: positionKey(node.fen) }))
         .filter((entry) => entry.key === currentKey);
-    if (occurrences.length < 3) return null;
+    if (occurrences.length < policy.repetitionOccurrences) return null;
 
     const previous = occurrences[occurrences.length - 2]?.index;
     if (previous === undefined) return null;
 
-    const cycle = classifyRepetitionCycle(line, previous);
-    return applyRepetitionRule(rule, cycle);
+    const cycle = classifyRepetitionCycle(line, previous, policy);
+    return applyRepetitionRule(rule, cycle, policy);
+}
+
+export function xiangqiNaturalDrawApplies(
+    rule: XiangqiRepetitionRule = currentXiangqiRepetitionRule(),
+): boolean {
+    return xiangqiRulePolicy(rule).naturalDraw;
 }
 
 function isXiangqiRepetitionRule(value: unknown): value is XiangqiRepetitionRule {
@@ -114,8 +128,15 @@ function nodesAtPath(root: GameNode, path: number[]): GameNode[] {
     return nodes;
 }
 
-function classifyRepetitionCycle(line: GameNode[], startIndex: number): Record<XiangqiColor, Violation> {
-    const stats: Record<XiangqiColor, { moves: number; checks: number; chaseSets: Set<PieceIdentity>[] }> = {
+function classifyRepetitionCycle(
+    line: GameNode[],
+    startIndex: number,
+    policy: RulePolicy,
+): Record<XiangqiColor, Violation> {
+    const stats: Record<
+        XiangqiColor,
+        { moves: number; checks: number; chaseSets: Set<PieceIdentity>[] }
+    > = {
         red: { moves: 0, checks: 0, chaseSets: [] },
         black: { moves: 0, checks: 0, chaseSets: [] },
     };
@@ -135,7 +156,7 @@ function classifyRepetitionCycle(line: GameNode[], startIndex: number): Record<X
         if (isInCheck(after, after.turn)) {
             stats[mover].checks += 1;
         }
-        stats[mover].chaseSets.push(chasedPieces(after, mover, tracker));
+        stats[mover].chaseSets.push(chasedPieces(after, mover, tracker, policy));
     }
 
     const hasAnyCheck = stats.red.checks > 0 || stats.black.checks > 0;
@@ -158,27 +179,70 @@ function classifySide(
 function applyRepetitionRule(
     rule: XiangqiRepetitionRule,
     cycle: Record<XiangqiColor, Violation>,
+    policy: RulePolicy,
 ): RuleOutcome {
     if (cycle.red === "idle" && cycle.black === "idle") {
         return { type: "draw", reason: "repetition" };
     }
 
-    if (rule === "AllowChase") {
-        return adjudicateByLevel(cycle, { chase: 0, check: 2 });
-    }
-
-    // The named Pikafish rules share the same violation ordering here; keeping
-    // them as separate policy entries prevents the detection code from encoding
-    // a single hard-wired rule and makes future source-verified deltas local.
     switch (rule) {
         case "AsianRule":
         case "ChineseRule":
         case "SkyRule":
         case "ComputerRule":
         case "YitianRule":
-            return adjudicateByLevel(cycle, { chase: 1, check: 2 });
+        case "AllowChase":
+            return adjudicateByLevel(cycle, { chase: policy.chaseLevel, check: 2 });
         case "NoJudgement":
             return null;
+    }
+}
+
+function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
+    switch (rule) {
+        case "ComputerRule":
+            return {
+                repetitionOccurrences: 3,
+                chaseLevel: 1,
+                chineseProtectedMinorChase: false,
+                naturalDraw: true,
+            };
+        case "ChineseRule":
+            return {
+                repetitionOccurrences: 2,
+                chaseLevel: 1,
+                chineseProtectedMinorChase: true,
+                naturalDraw: true,
+            };
+        case "YitianRule":
+            return {
+                repetitionOccurrences: 2,
+                chaseLevel: 1,
+                chineseProtectedMinorChase: false,
+                naturalDraw: false,
+            };
+        case "AllowChase":
+            return {
+                repetitionOccurrences: 2,
+                chaseLevel: 0,
+                chineseProtectedMinorChase: false,
+                naturalDraw: true,
+            };
+        case "NoJudgement":
+            return {
+                repetitionOccurrences: Number.POSITIVE_INFINITY,
+                chaseLevel: 0,
+                chineseProtectedMinorChase: false,
+                naturalDraw: true,
+            };
+        case "AsianRule":
+        case "SkyRule":
+            return {
+                repetitionOccurrences: 2,
+                chaseLevel: 1,
+                chineseProtectedMinorChase: false,
+                naturalDraw: true,
+            };
     }
 }
 
@@ -192,7 +256,11 @@ function adjudicateByLevel(
         return { type: "draw", reason: "repetition" };
     }
     const loser = red > black ? "red" : "black";
-    return { type: "loss", loser, reason: red > black ? reasonFor(cycle.red) : reasonFor(cycle.black) };
+    return {
+        type: "loss",
+        loser,
+        reason: red > black ? reasonFor(cycle.red) : reasonFor(cycle.black),
+    };
 }
 
 function violationLevel(violation: Violation, levels: { chase: number; check: number }): number {
@@ -232,6 +300,7 @@ function chasedPieces(
     position: XiangqiPosition,
     color: XiangqiColor,
     tracker: PieceTracker,
+    policy: RulePolicy,
 ): Set<PieceIdentity> {
     const result = new Set<PieceIdentity>();
     const probe: XiangqiPosition = { ...position, turn: color };
@@ -241,7 +310,10 @@ function chasedPieces(
         if (!attacker || !target || target.color === color) continue;
         if (!canBeChaseAttacker(attacker.role)) continue;
         if (!canBeChaseTarget(target, move.to)) continue;
-        if (!isProtectedAfterCapture(probe, move) || isForceChase(attacker.role, target.role)) {
+        if (
+            !isProtectedAfterCapture(probe, move) ||
+            isForceChase(attacker.role, target.role, policy)
+        ) {
             const id = tracker.get(move.to);
             if (id) result.add(id);
         }
@@ -260,8 +332,15 @@ function canBeChaseTarget(piece: { color: XiangqiColor; role: string }, square: 
     return piece.color === "red" ? rank >= 5 : rank <= 4;
 }
 
-function isForceChase(attackerRole: string, targetRole: string): boolean {
-    return (attackerRole === "horse" || attackerRole === "cannon") && targetRole === "rook";
+function isForceChase(attackerRole: string, targetRole: string, policy: RulePolicy): boolean {
+    if ((attackerRole === "horse" || attackerRole === "cannon") && targetRole === "rook") {
+        return true;
+    }
+    return (
+        policy.chineseProtectedMinorChase &&
+        (attackerRole === "advisor" || attackerRole === "elephant") &&
+        (targetRole === "rook" || targetRole === "horse" || targetRole === "cannon")
+    );
 }
 
 function isProtectedAfterCapture(position: XiangqiPosition, move: XiangqiMove): boolean {

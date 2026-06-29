@@ -27,7 +27,7 @@ import {
   type XiangqiDrawShape,
   type XiangqiMove,
 } from "./xiangqi";
-import { adjudicateXiangqiRepetition } from "./rules";
+import { adjudicateXiangqiRepetition, xiangqiNaturalDrawApplies } from "./rules";
 
 export type { XiangqiHeaders, XiangqiOrientation, XiangqiResult } from "./persistence";
 
@@ -420,7 +420,7 @@ function adjudicateXiangqiResult(
     };
   }
   // 120 half-moves (60 full moves) without capture is the standard draw threshold.
-  if (position.halfmove >= 120) {
+  if (position.halfmove >= 120 && xiangqiNaturalDrawApplies()) {
     return { result: "1/2-1/2", reason: "naturalDraw" };
   }
   return null;
