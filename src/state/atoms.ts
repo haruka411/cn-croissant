@@ -34,11 +34,6 @@ import {
     DEFAULT_CUSTOM_BOARD_CALIBRATION,
     type CustomBoardCalibration,
 } from "@/xiangqi/customBoardTheme";
-import {
-    DEFAULT_XIANGQI_REPETITION_RULE,
-    XIANGQI_REPETITION_RULE_STORAGE_KEY,
-    type XiangqiRepetitionRule,
-} from "@/xiangqi/rules";
 import { getEnginesDir } from "../utils/directories";
 import type { Session } from "../utils/session";
 import { createAsyncZodStorage, createZodStorage } from "./utils";
@@ -190,10 +185,6 @@ export const showVariationArrowsAtom = atomWithStorage<boolean>("show-variation-
 export const xiangqiAnalysisAutoStartAtom = atomWithStorage<boolean>(
     "xiangqi-analysis-auto-start",
     true,
-);
-export const xiangqiRepetitionRuleAtom = atomWithStorage<XiangqiRepetitionRule>(
-    XIANGQI_REPETITION_RULE_STORAGE_KEY,
-    DEFAULT_XIANGQI_REPETITION_RULE,
 );
 export const eraseDrawablesOnClickAtom = atomWithStorage<boolean>(
     "erase-drawables-on-click",

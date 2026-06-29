@@ -779,7 +779,9 @@
 }
 
 .board[data-piece-style="custom-svg"] .piece,
-.pieceSurface[data-piece-style="custom-svg"] .piece {
+.board[data-piece-style="custom-png"] .piece,
+.pieceSurface[data-piece-style="custom-svg"] .piece,
+.pieceSurface[data-piece-style="custom-png"] .piece {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
@@ -787,8 +789,12 @@
 
 .board[data-piece-style="custom-svg"] .piece::before,
 .board[data-piece-style="custom-svg"] .piece::after,
+.board[data-piece-style="custom-png"] .piece::before,
+.board[data-piece-style="custom-png"] .piece::after,
 .pieceSurface[data-piece-style="custom-svg"] .piece::before,
-.pieceSurface[data-piece-style="custom-svg"] .piece::after {
+.pieceSurface[data-piece-style="custom-svg"] .piece::after,
+.pieceSurface[data-piece-style="custom-png"] .piece::before,
+.pieceSurface[data-piece-style="custom-png"] .piece::after {
   display: none;
 }
 

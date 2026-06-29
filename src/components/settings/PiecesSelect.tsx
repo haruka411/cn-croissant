@@ -19,6 +19,9 @@ import { useAtom } from "jotai";
 import { useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  customPngPieceDirectoryAtom,
+  customPngPieceScaleAtom,
+  customPngPieceThemeConfirmedAtom,
   customPieceDirectoryAtom,
   customPieceScaleAtom,
   customPieceThemeConfirmedAtom,
@@ -37,7 +40,9 @@ import {
 } from "@/xiangqi/pieceStyleOptions";
 import {
   CUSTOM_PIECE_FILES,
+  CUSTOM_PNG_PIECE_FILES,
   type CustomPieceUrls,
+  type CustomPieceFormat,
   loadCustomXiangqiPieceTheme,
   openCustomXiangqiPieceFolder,
   useCustomXiangqiPieces,
@@ -60,6 +65,7 @@ const pieceStyles: { value: XiangqiPieceStyle }[] = [
   { value: "bamboo" },
   { value: "crystal" },
   { value: "custom-svg" },
+  { value: "custom-png" },
 ];
 
 function PiecePreview({
@@ -85,7 +91,7 @@ function PiecePreview({
     XIANGQI_PIECE_INNER_SCALE_MIN,
     Math.min(innerScale, XIANGQI_PIECE_INNER_SCALE_MAX),
   );
-  const isCustomSvg = value === "custom-svg";
+  const isCustomPiece = value === "custom-svg" || value === "custom-png";
   const showInnerRing = innerRingVisible && xiangqiPieceStyleHasInnerRing(value);
   const clampedCustomPieceScale = Math.max(
     CUSTOM_PIECE_SCALE_MIN,
@@ -116,28 +122,28 @@ function PiecePreview({
       gap={10}
     >
       <Box className={clsx(boardClasses.piece, boardClasses.pieceRed)} style={previewPieceStyle}>
-        {isCustomSvg && customPieceUrls?.["red-king"] ? (
+        {isCustomPiece && customPieceUrls?.["red-king"] ? (
           <Box
             component="img"
             src={customPieceUrls["red-king"]}
             className={boardClasses.customPieceImage}
             alt=""
           />
-        ) : !isCustomSvg ? (
+        ) : !isCustomPiece ? (
           <Box component="span" className={boardClasses.pieceText}>
             帅
           </Box>
         ) : null}
       </Box>
       <Box className={clsx(boardClasses.piece, boardClasses.pieceBlack)} style={previewPieceStyle}>
-        {isCustomSvg && customPieceUrls?.["black-king"] ? (
+        {isCustomPiece && customPieceUrls?.["black-king"] ? (
           <Box
             component="img"
             src={customPieceUrls["black-king"]}
             className={boardClasses.customPieceImage}
             alt=""
           />
-        ) : !isCustomSvg ? (
+        ) : !isCustomPiece ? (
           <Box component="span" className={boardClasses.pieceText}>
             将
           </Box>
@@ -155,6 +161,13 @@ export default function PiecesSelect() {
   const [customPieceThemeConfirmed, setCustomPieceThemeConfirmed] = useAtom(
     customPieceThemeConfirmedAtom,
   );
+  const [customPngPieceDirectory, setCustomPngPieceDirectory] = useAtom(
+    customPngPieceDirectoryAtom,
+  );
+  const [customPngPieceScale, setCustomPngPieceScale] = useAtom(customPngPieceScaleAtom);
+  const [customPngPieceThemeConfirmed, setCustomPngPieceThemeConfirmed] = useAtom(
+    customPngPieceThemeConfirmedAtom,
+  );
   const [textScale, setTextScale] = useAtom(xiangqiPieceTextScaleAtom);
   const [innerScale, setInnerScale] = useAtom(xiangqiPieceInnerScaleAtom);
   const [innerRingVisible, setInnerRingVisible] = useAtom(xiangqiPieceInnerRingVisibleAtom);
@@ -167,13 +180,26 @@ export default function PiecesSelect() {
   }));
   const supportsInnerRing = xiangqiPieceStyleHasInnerRing(selected.value);
   const isCustomSvg = selected.value === "custom-svg";
+  const isCustomPng = selected.value === "custom-png";
+  const isCustomPiece = isCustomSvg || isCustomPng;
+  const customFormat: CustomPieceFormat = isCustomPng ? "png" : "svg";
+  const activeCustomPieceDirectory = isCustomPng ? customPngPieceDirectory : customPieceDirectory;
+  const activeCustomPieceScale = isCustomPng ? customPngPieceScale : customPieceScale;
+  const activeCustomPieceConfirmed = isCustomPng
+    ? customPngPieceThemeConfirmed
+    : customPieceThemeConfirmed;
+  const customTranslationPrefix = isCustomPng
+    ? "Settings.Pieces.CustomPng"
+    : "Settings.Pieces.CustomSvg";
+  const activeCustomPieceFiles = isCustomPng ? CUSTOM_PNG_PIECE_FILES : CUSTOM_PIECE_FILES;
   const customPieceTheme = useCustomXiangqiPieces(
-    isCustomSvg,
-    customPieceDirectory || undefined,
+    isCustomPiece,
+    activeCustomPieceDirectory || undefined,
     customPieceReloadToken,
+    customFormat,
   );
   const customPiecePathLabel =
-    customPieceDirectory || customPieceTheme.dir || t("Settings.Pieces.CustomSvg.DefaultPath");
+    activeCustomPieceDirectory || customPieceTheme.dir || t(`${customTranslationPrefix}.DefaultPath`);
   const isInnerRingVisible = innerRingVisible[selected.value] ?? true;
   const clampedTextScale = Math.max(
     XIANGQI_PIECE_TEXT_SCALE_MIN,
@@ -185,20 +211,47 @@ export default function PiecesSelect() {
   );
   const clampedCustomPieceScale = Math.max(
     CUSTOM_PIECE_SCALE_MIN,
-    Math.min(customPieceScale, CUSTOM_PIECE_SCALE_MAX),
+    Math.min(activeCustomPieceScale, CUSTOM_PIECE_SCALE_MAX),
   );
 
-  async function checkCustomPieces(dir = customPieceDirectory) {
+  function setActiveCustomPieceConfirmed(value: boolean) {
+    if (isCustomPng) {
+      setCustomPngPieceThemeConfirmed(value);
+    } else {
+      setCustomPieceThemeConfirmed(value);
+    }
+  }
+
+  function setActiveCustomPieceDirectory(value: string) {
+    if (isCustomPng) {
+      setCustomPngPieceDirectory(value);
+    } else {
+      setCustomPieceDirectory(value);
+    }
+  }
+
+  function setActiveCustomPieceScale(value: number) {
+    if (isCustomPng) {
+      setCustomPngPieceScale(value);
+    } else {
+      setCustomPieceScale(value);
+    }
+  }
+
+  async function checkCustomPieces(dir = activeCustomPieceDirectory) {
     setCheckingCustomPieces(true);
     try {
-      const theme = await loadCustomXiangqiPieceTheme(dir || undefined, { forceReload: true });
+      const theme = await loadCustomXiangqiPieceTheme(dir || undefined, {
+        forceReload: true,
+        format: customFormat,
+      });
       setCustomPieceReloadToken((token) => token + 1);
       if (theme.missing.length > 0) {
-        setCustomPieceThemeConfirmed(false);
+        setActiveCustomPieceConfirmed(false);
         notifications.show({
           color: "red",
-          title: t("Settings.Pieces.CustomSvg.Incomplete"),
-          message: t("Settings.Pieces.CustomSvg.Incomplete.Desc", {
+          title: t(`${customTranslationPrefix}.Incomplete`),
+          message: t(`${customTranslationPrefix}.Incomplete.Desc`, {
             dirs: theme.checkedDirs.join("; "),
             files: theme.missing.join(", "),
           }),
@@ -206,19 +259,19 @@ export default function PiecesSelect() {
         return false;
       }
 
-      setCustomPieceThemeConfirmed(true);
+      setActiveCustomPieceConfirmed(true);
       notifications.show({
         color: "green",
-        title: t("Settings.Pieces.CustomSvg.Enabled"),
+        title: t(`${customTranslationPrefix}.Enabled`),
         message: theme.dir,
       });
       return true;
     } catch {
-      setCustomPieceThemeConfirmed(false);
+      setActiveCustomPieceConfirmed(false);
       notifications.show({
         color: "red",
-        title: t("Settings.Pieces.CustomSvg.ReadFailed"),
-        message: t("Settings.Pieces.CustomSvg.ReadFailed.Desc"),
+        title: t(`${customTranslationPrefix}.ReadFailed`),
+        message: t(`${customTranslationPrefix}.ReadFailed.Desc`),
       });
       return false;
     } finally {
@@ -230,20 +283,23 @@ export default function PiecesSelect() {
     const selectedDir = await open({ multiple: false, directory: true });
     if (!selectedDir || typeof selectedDir !== "string") return;
 
-    setCustomPieceDirectory(selectedDir);
-    setPieceSet("custom-svg");
+    setActiveCustomPieceDirectory(selectedDir);
+    setPieceSet(selected.value);
     await checkCustomPieces(selectedDir);
   }
 
   async function openCustomPieceDirectory() {
     try {
-      const dir = await openCustomXiangqiPieceFolder(customPieceDirectory || undefined);
-      if (!customPieceDirectory) setCustomPieceDirectory(dir);
+      const dir = await openCustomXiangqiPieceFolder(
+        activeCustomPieceDirectory || undefined,
+        customFormat,
+      );
+      if (!activeCustomPieceDirectory) setActiveCustomPieceDirectory(dir);
     } catch {
       notifications.show({
         color: "red",
-        title: t("Settings.Pieces.CustomSvg.OpenFailed"),
-        message: t("Settings.Pieces.CustomSvg.OpenFailed.Desc"),
+        title: t(`${customTranslationPrefix}.OpenFailed`),
+        message: t(`${customTranslationPrefix}.OpenFailed.Desc`),
       });
     }
   }
@@ -267,18 +323,19 @@ export default function PiecesSelect() {
           disabled={checkingCustomPieces}
           onChange={async (value) => {
             if (!value) return;
-            if (value !== "custom-svg") {
+            if (value !== "custom-svg" && value !== "custom-png") {
               setCustomPieceThemeConfirmed(false);
+              setCustomPngPieceThemeConfirmed(false);
               setPieceSet(value as XiangqiPieceStyle);
               return;
             }
 
-            setPieceSet("custom-svg");
+            setPieceSet(value as XiangqiPieceStyle);
             await checkCustomPieces();
           }}
         />
       </Group>
-      {!isCustomSvg && (
+      {!isCustomPiece && (
         <Stack gap={4}>
           <Text size="sm" fw={700}>
             {t("Settings.Pieces.TextSize")}
@@ -292,7 +349,7 @@ export default function PiecesSelect() {
           />
         </Stack>
       )}
-      {!isCustomSvg && supportsInnerRing && (
+      {!isCustomPiece && supportsInnerRing && (
         <>
           <Switch
             label={t("Settings.Pieces.InnerRing")}
@@ -321,7 +378,7 @@ export default function PiecesSelect() {
           )}
         </>
       )}
-      {isCustomSvg && (
+      {isCustomPiece && (
         <Stack gap={4}>
           <Group wrap="nowrap" gap="xs">
             <Button
@@ -331,7 +388,7 @@ export default function PiecesSelect() {
               onClick={() => void chooseCustomPieceDirectory()}
               disabled={checkingCustomPieces}
             >
-              {t("Settings.Pieces.CustomSvg.ChooseFolder")}
+              {t(`${customTranslationPrefix}.ChooseFolder`)}
             </Button>
             <Button
               size="xs"
@@ -341,10 +398,10 @@ export default function PiecesSelect() {
             >
               {t("Common.Open")}
             </Button>
-            <Tooltip label={t("Settings.Pieces.CustomSvg.Recheck")}>
+            <Tooltip label={t(`${customTranslationPrefix}.Recheck`)}>
               <ActionIcon
                 variant="default"
-                aria-label={t("Settings.Pieces.CustomSvg.Recheck")}
+                aria-label={t(`${customTranslationPrefix}.Recheck`)}
                 loading={checkingCustomPieces || customPieceTheme.loading}
                 onClick={() => void checkCustomPieces()}
               >
@@ -360,34 +417,34 @@ export default function PiecesSelect() {
           {customPieceTheme.missing.length > 0 ? (
             <Text size="xs" c={customPieceTheme.loading ? "dimmed" : "red"}>
               {customPieceTheme.loading
-                ? t("Settings.Pieces.CustomSvg.Checking")
-                : t("Settings.Pieces.CustomSvg.MissingFiles", {
+                ? t(`${customTranslationPrefix}.Checking`)
+                : t(`${customTranslationPrefix}.MissingFiles`, {
                     files: customPieceTheme.missing.join(", "),
                   })}
             </Text>
           ) : (
-            <Text size="xs" c={customPieceThemeConfirmed ? "green" : "dimmed"}>
-              {customPieceThemeConfirmed
-                ? t("Settings.Pieces.CustomSvg.Enabled")
-                : t("Settings.Pieces.CustomSvg.Ready")}
+            <Text size="xs" c={activeCustomPieceConfirmed ? "green" : "dimmed"}>
+              {activeCustomPieceConfirmed
+                ? t(`${customTranslationPrefix}.Enabled`)
+                : t(`${customTranslationPrefix}.Ready`)}
             </Text>
           )}
           <Stack gap={4}>
             <Text size="sm" fw={700}>
-              {t("Settings.Pieces.CustomSvg.Size", { scale: clampedCustomPieceScale })}
+              {t(`${customTranslationPrefix}.Size`, { scale: clampedCustomPieceScale })}
             </Text>
             <Slider
               min={CUSTOM_PIECE_SCALE_MIN}
               max={CUSTOM_PIECE_SCALE_MAX}
               step={1}
               value={clampedCustomPieceScale}
-              onChange={setCustomPieceScale}
+              onChange={setActiveCustomPieceScale}
               label={(value) => `${value}%`}
             />
           </Stack>
           <Text size="xs" c="dimmed">
-            {t("Settings.Pieces.CustomSvg.FilesDesc", {
-              files: Object.values(CUSTOM_PIECE_FILES).join(", "),
+            {t(`${customTranslationPrefix}.FilesDesc`, {
+              files: Object.values(activeCustomPieceFiles).join(", "),
             })}
           </Text>
         </Stack>

@@ -39,7 +39,6 @@ import {
   gamePlayer1SettingsAtom,
   gamePlayer2SettingsAtom,
   gameSameTimeControlAtom,
-  xiangqiRepetitionRuleAtom,
 } from "@/state/atoms";
 import { useXiangqiStore } from "@/xiangqi/store";
 import {
@@ -74,7 +73,6 @@ function BoardGame() {
   const [openingBookPath, setOpeningBookPath] = useAtom(gameOpeningBookPathAtom);
   const [openingBookEnabled, setOpeningBookEnabled] = useAtom(gameOpeningBookEnabledAtom);
   const [openingBookMaxPly, setOpeningBookMaxPly] = useAtom(gameOpeningBookMaxPlyAtom);
-  const [xiangqiRule] = useAtom(xiangqiRepetitionRuleAtom);
   const gameInitialFen = useRef(INITIAL_XIANGQI_FEN);
   const gameStartPath = useRef<number[]>([]);
   const boardRef = useRef(null);
@@ -355,7 +353,6 @@ function BoardGame() {
                 maxPly: openingBookMaxPly,
               }
             : null,
-        xiangqiRule,
       } as GameConfig;
 
       const result = await commands.startGame(newGameId, config);

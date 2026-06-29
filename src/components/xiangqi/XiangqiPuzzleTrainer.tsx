@@ -35,6 +35,9 @@ import {
   boardImageAtom,
   customBoardCalibrationAtom,
   customBoardImageAtom,
+  customPngPieceDirectoryAtom,
+  customPngPieceScaleAtom,
+  customPngPieceThemeConfirmedAtom,
   customPieceDirectoryAtom,
   customPieceScaleAtom,
   customPieceThemeConfirmedAtom,
@@ -113,12 +116,30 @@ export default function XiangqiPuzzleTrainer() {
   const customPieceDirectory = useAtomValue(customPieceDirectoryAtom);
   const customPieceScale = useAtomValue(customPieceScaleAtom);
   const customPieceThemeConfirmed = useAtomValue(customPieceThemeConfirmedAtom);
+  const customPngPieceDirectory = useAtomValue(customPngPieceDirectoryAtom);
+  const customPngPieceScale = useAtomValue(customPngPieceScaleAtom);
+  const customPngPieceThemeConfirmed = useAtomValue(customPngPieceThemeConfirmedAtom);
   const pieceTextScale = useAtomValue(xiangqiPieceTextScaleAtom);
   const pieceInnerScale = useAtomValue(xiangqiPieceInnerScaleAtom);
   const pieceInnerRingVisible = useAtomValue(xiangqiPieceInnerRingVisibleAtom);
+  const isCustomSvgPiece = pieceStyle === "custom-svg";
+  const isCustomPngPiece = pieceStyle === "custom-png";
+  const isCustomPiece = isCustomSvgPiece || isCustomPngPiece;
+  const activeCustomPieceDirectory = isCustomPngPiece
+    ? customPngPieceDirectory
+    : customPieceDirectory;
+  const activeCustomPieceScale = isCustomPngPiece ? customPngPieceScale : customPieceScale;
+  const activeCustomPieceConfirmed = isCustomPngPiece
+    ? customPngPieceThemeConfirmed
+    : customPieceThemeConfirmed;
+  const customPieceTranslationPrefix = isCustomPngPiece
+    ? "Settings.Pieces.CustomPng"
+    : "Settings.Pieces.CustomSvg";
   const customPieceTheme = useCustomXiangqiPieces(
-    pieceStyle === "custom-svg",
-    customPieceDirectory || undefined,
+    isCustomPiece,
+    activeCustomPieceDirectory || undefined,
+    0,
+    isCustomPngPiece ? "png" : "svg",
   );
   const customPieceWarningShownRef = useRef(false);
   const showDests = useAtomValue(showDestsAtom);
@@ -153,16 +174,16 @@ export default function XiangqiPuzzleTrainer() {
   const canUserMove = status === "ready" || status === "wrong";
   const customPieceThemeChecked = customPieceTheme.checkedDirs.length > 0;
   const useCustomPieces =
-    pieceStyle === "custom-svg" &&
-    customPieceThemeConfirmed &&
+    isCustomPiece &&
+    activeCustomPieceConfirmed &&
     customPieceThemeChecked &&
     !customPieceTheme.loading &&
     customPieceTheme.missing.length === 0;
 
   useEffect(() => {
     if (
-      pieceStyle !== "custom-svg" ||
-      !customPieceThemeConfirmed ||
+      !isCustomPiece ||
+      !activeCustomPieceConfirmed ||
       customPieceTheme.loading ||
       !customPieceThemeChecked
     )
@@ -176,16 +197,18 @@ export default function XiangqiPuzzleTrainer() {
     customPieceWarningShownRef.current = true;
     notifications.show({
       color: "red",
-      title: t("Settings.Pieces.CustomSvg.Incomplete"),
-      message: t("Settings.Pieces.CustomSvg.Incomplete.Desc", {
+      title: t(`${customPieceTranslationPrefix}.Incomplete`),
+      message: t(`${customPieceTranslationPrefix}.Incomplete.Desc`, {
         dirs: customPieceTheme.checkedDirs.join("; "),
         files: customPieceTheme.missing.join(", "),
       }),
     });
   }, [
     pieceStyle,
+    isCustomPiece,
     t,
-    customPieceThemeConfirmed,
+    activeCustomPieceConfirmed,
+    customPieceTranslationPrefix,
     customPieceTheme.loading,
     customPieceThemeChecked,
     customPieceTheme.missing,
@@ -392,8 +415,8 @@ export default function XiangqiPuzzleTrainer() {
                     boardTheme={resolvedBoardTheme}
                     pieceStyle={
                       useCustomPieces
-                        ? "custom-svg"
-                        : pieceStyle === "custom-svg"
+                        ? pieceStyle
+                        : isCustomPiece
                           ? "classic"
                           : pieceStyle
                     }
@@ -403,7 +426,7 @@ export default function XiangqiPuzzleTrainer() {
                     customBoardImageUrl={customBoardUrl}
                     customBoardCalibration={customBoardCalibration}
                     customPieceUrls={useCustomPieces ? customPieceTheme.urls : undefined}
-                    customPieceScale={customPieceScale}
+                    customPieceScale={activeCustomPieceScale}
                     showDests={showDests}
                     showLastMove={showLastMove}
                     coordinates={showCoordinates}

@@ -80,6 +80,9 @@ import {
   boardImageAtom,
   customBoardCalibrationAtom,
   customBoardImageAtom,
+  customPngPieceDirectoryAtom,
+  customPngPieceScaleAtom,
+  customPngPieceThemeConfirmedAtom,
   customPieceDirectoryAtom,
   customPieceScaleAtom,
   customPieceThemeConfirmedAtom,
@@ -2079,9 +2082,23 @@ function PreviewBoard({ fen }: { fen: string }) {
   const customPieceDirectory = useAtomValue(customPieceDirectoryAtom);
   const customPieceScale = useAtomValue(customPieceScaleAtom);
   const customPieceThemeConfirmed = useAtomValue(customPieceThemeConfirmedAtom);
+  const customPngPieceDirectory = useAtomValue(customPngPieceDirectoryAtom);
+  const customPngPieceScale = useAtomValue(customPngPieceScaleAtom);
+  const customPngPieceThemeConfirmed = useAtomValue(customPngPieceThemeConfirmedAtom);
+  const isCustomPngPiece = pieceStyle === "custom-png";
+  const isCustomPiece = pieceStyle === "custom-svg" || isCustomPngPiece;
+  const activeCustomPieceDirectory = isCustomPngPiece
+    ? customPngPieceDirectory
+    : customPieceDirectory;
+  const activeCustomPieceScale = isCustomPngPiece ? customPngPieceScale : customPieceScale;
+  const activeCustomPieceConfirmed = isCustomPngPiece
+    ? customPngPieceThemeConfirmed
+    : customPieceThemeConfirmed;
   const customPieceTheme = useCustomXiangqiPieces(
-    pieceStyle === "custom-svg",
-    customPieceDirectory || undefined,
+    isCustomPiece,
+    activeCustomPieceDirectory || undefined,
+    0,
+    isCustomPngPiece ? "png" : "svg",
   );
   const customBoardUrl =
     boardTheme === "custom-png" && customBoardImage
@@ -2090,8 +2107,8 @@ function PreviewBoard({ fen }: { fen: string }) {
   const resolvedBoardTheme =
     boardTheme === "custom-png" && !customBoardUrl ? "classic" : boardTheme;
   const useCustomPieces =
-    pieceStyle === "custom-svg" &&
-    customPieceThemeConfirmed &&
+    isCustomPiece &&
+    activeCustomPieceConfirmed &&
     customPieceTheme.checkedDirs.length > 0 &&
     !customPieceTheme.loading &&
     customPieceTheme.missing.length === 0;
@@ -2104,11 +2121,11 @@ function PreviewBoard({ fen }: { fen: string }) {
         lastMove={null}
         orientation="red"
         boardTheme={resolvedBoardTheme}
-        pieceStyle={useCustomPieces ? "custom-svg" : "classic"}
+        pieceStyle={useCustomPieces ? pieceStyle : "classic"}
         customBoardImageUrl={customBoardUrl}
         customBoardCalibration={customBoardCalibration}
         customPieceUrls={useCustomPieces ? customPieceTheme.urls : undefined}
-        customPieceScale={customPieceScale}
+        customPieceScale={activeCustomPieceScale}
         showDests={false}
         showLastMove={false}
         moveMethod="select"

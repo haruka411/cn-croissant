@@ -62,7 +62,8 @@ export type PieceStyle =
   | "stone"
   | "bamboo"
   | "crystal"
-  | "custom-svg";
+  | "custom-svg"
+  | "custom-png";
 export type MoveMethod = "drag" | "select" | "both";
 export type CoordinateDisplay = "no" | "edge" | "all";
 
@@ -544,7 +545,7 @@ export function XiangqiBoard({
 
         {Array.from(position.board.entries()).map(([sq, piece]) => {
           const customPieceSrc =
-            pieceStyle === "custom-svg"
+            pieceStyle === "custom-svg" || pieceStyle === "custom-png"
               ? customPieceUrls?.[customPieceKey(piece.color, piece.role)]
               : undefined;
 
@@ -583,7 +584,7 @@ export function XiangqiBoard({
                   draggable={false}
                   alt=""
                 />
-              ) : pieceStyle === "custom-svg" ? null : (
+              ) : pieceStyle === "custom-svg" || pieceStyle === "custom-png" ? null : (
                 <span className={classes.pieceText}>{PIECE_LABELS[piece.color][piece.role]}</span>
               )}
             </button>

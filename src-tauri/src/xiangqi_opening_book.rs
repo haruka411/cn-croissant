@@ -213,7 +213,7 @@ fn decode_obk_row(row: ObkRow, left_right_swap: bool) -> Option<XiangqiBookMove>
     })
 }
 
-fn obk_zobrist(position: &XiangqiPosition, left_right_swap: bool) -> u64 {
+pub(crate) fn obk_zobrist(position: &XiangqiPosition, left_right_swap: bool) -> u64 {
     let mut zobrist = 0u64;
     for fen_row in 0..10 {
         let rank = 9 - fen_row;
@@ -554,6 +554,25 @@ const OBK_C90: [i32; 90] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_book_path(extension: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be valid")
+            .as_nanos();
+        std::env::temp_dir().join(format!("cn-croissant-opening-book-{stamp}.{extension}"))
+    }
+
+    fn obk_square_from_uci(file: usize, rank: usize) -> i32 {
+        let row_from_top = 9 - rank;
+        (((row_from_top + 3) as i32) << 4) | ((file + 3) as i32)
+    }
+
+    fn obk_move(from_file: usize, from_rank: usize, to_file: usize, to_rank: usize) -> i32 {
+        (obk_square_from_uci(from_file, from_rank) << 8)
+            | obk_square_from_uci(to_file, to_rank)
+    }
 
     #[test]
     fn reads_bundled_obk_table() {
@@ -602,5 +621,51 @@ mod tests {
                 .and_then(|mv| crate::apply_xiangqi_move(&position, mv).map(|_| ()))
                 .is_ok()
         }));
+    }
+
+    #[test]
+    fn queries_temporary_pfbook_initial_position() {
+        let path = temp_book_path("pfBook");
+        let position =
+            XiangqiPosition::parse(crate::INITIAL_XIANGQI_FEN).expect("initial FEN should parse");
+        let key = obk_zobrist(&position, false) as i64;
+        let move_c3c4 = obk_move(2, 3, 2, 4);
+
+        {
+            let connection = Connection::open(&path).expect("temporary pfBook should be created");
+            connection
+                .execute(
+                    "CREATE TABLE pfBook (
+                        vkey INTEGER NOT NULL,
+                        vmove INTEGER NOT NULL,
+                        vscore INTEGER NOT NULL,
+                        vwin INTEGER NOT NULL,
+                        vdraw INTEGER NOT NULL,
+                        vlost INTEGER NOT NULL,
+                        vvalid INTEGER NOT NULL
+                    )",
+                    [],
+                )
+                .expect("pfBook table should be created");
+            connection
+                .execute(
+                    "INSERT INTO pfBook (vkey, vmove, vscore, vwin, vdraw, vlost, vvalid)
+                     VALUES (?1, ?2, 10, 7, 2, 1, 1)",
+                    params![key, move_c3c4],
+                )
+                .expect("pfBook move should be inserted");
+        }
+
+        let book = XiangqiOpeningBook::new(XiangqiOpeningBookConfig {
+            path: path.to_string_lossy().to_string(),
+            max_ply: 40,
+        })
+        .expect("temporary pfBook should load");
+        let moves = book
+            .query(&position)
+            .expect("initial position should query temporary pfBook");
+
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(moves.first().map(|book_move| book_move.uci.as_str()), Some("c3c4"));
     }
 }
