@@ -26,8 +26,6 @@ type Violation = "idle" | "chase" | "check";
 type RulePolicy = {
     repetitionOccurrences: number;
     chaseLevel: number;
-    chaseContinuity: "samePiece" | "anyPiece";
-    protectedMinorChase: boolean;
     naturalDrawMode: "pikafish" | "plain120" | "disabled";
     naturalDraw: boolean;
 };
@@ -96,7 +94,7 @@ export function judgeXiangqiRepetition(
     const previous = occurrences[occurrences.length - 2]?.index;
     if (previous === undefined) return null;
 
-    const cycle = classifyRepetitionCycle(line, previous, policy);
+    const cycle = classifyRepetitionCycle(line, previous);
     return applyRepetitionRule(rule, cycle, policy);
 }
 
@@ -187,7 +185,6 @@ function nodesAtPath(root: GameNode, path: number[]): GameNode[] {
 function classifyRepetitionCycle(
     line: GameNode[],
     startIndex: number,
-    policy: RulePolicy,
 ): Record<XiangqiColor, Violation> {
     const stats: Record<
         XiangqiColor,
@@ -212,28 +209,22 @@ function classifyRepetitionCycle(
         if (isInCheck(after, after.turn)) {
             stats[mover].checks += 1;
         }
-        stats[mover].chaseSets.push(chasedPieces(after, mover, tracker, policy));
+        stats[mover].chaseSets.push(chasedPieces(after, mover, tracker));
     }
 
     const hasAnyCheck = stats.red.checks > 0 || stats.black.checks > 0;
     return {
-        red: classifySide(stats.red, hasAnyCheck, policy),
-        black: classifySide(stats.black, hasAnyCheck, policy),
+        red: classifySide(stats.red, hasAnyCheck),
+        black: classifySide(stats.black, hasAnyCheck),
     };
 }
 
 function classifySide(
     side: { moves: number; checks: number; chaseSets: Set<PieceIdentity>[] },
     hasAnyCheck: boolean,
-    policy: RulePolicy,
 ): Violation {
     if (side.moves > 0 && side.checks === side.moves) return "check";
     if (hasAnyCheck) return "idle";
-    if (policy.chaseContinuity === "anyPiece") {
-        return side.chaseSets.length > 0 && side.chaseSets.every((set) => set.size > 0)
-            ? "chase"
-            : "idle";
-    }
     const common = intersectAll(side.chaseSets);
     return common.size > 0 ? "chase" : "idle";
 }
@@ -266,8 +257,6 @@ function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
             return {
                 repetitionOccurrences: 3,
                 chaseLevel: 1,
-                chaseContinuity: "samePiece",
-                protectedMinorChase: false,
                 naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
@@ -275,8 +264,6 @@ function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 1,
-                chaseContinuity: "anyPiece",
-                protectedMinorChase: true,
                 naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
@@ -284,8 +271,6 @@ function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 1,
-                chaseContinuity: "samePiece",
-                protectedMinorChase: false,
                 naturalDrawMode: "disabled",
                 naturalDraw: false,
             };
@@ -293,8 +278,6 @@ function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 0,
-                chaseContinuity: "samePiece",
-                protectedMinorChase: false,
                 naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
@@ -302,8 +285,6 @@ function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
             return {
                 repetitionOccurrences: Number.POSITIVE_INFINITY,
                 chaseLevel: 0,
-                chaseContinuity: "samePiece",
-                protectedMinorChase: false,
                 naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
@@ -311,8 +292,6 @@ function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 1,
-                chaseContinuity: "samePiece",
-                protectedMinorChase: false,
                 naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
@@ -320,8 +299,6 @@ function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 1,
-                chaseContinuity: "samePiece",
-                protectedMinorChase: false,
                 naturalDrawMode: "plain120",
                 naturalDraw: true,
             };
@@ -382,7 +359,6 @@ function chasedPieces(
     position: XiangqiPosition,
     color: XiangqiColor,
     tracker: PieceTracker,
-    policy: RulePolicy,
 ): Set<PieceIdentity> {
     const result = new Set<PieceIdentity>();
     const probe: XiangqiPosition = { ...position, turn: color };
@@ -392,10 +368,7 @@ function chasedPieces(
         if (!attacker || !target || target.color === color) continue;
         if (!canBeChaseAttacker(attacker.role)) continue;
         if (!canBeChaseTarget(target, move.to)) continue;
-        if (
-            !isProtectedAfterCapture(probe, move) ||
-            isForceChase(attacker.role, target.role, policy)
-        ) {
+        if (!isProtectedAfterCapture(probe, move) || isForceChase(attacker.role, target.role)) {
             const id = tracker.get(move.to);
             if (id) result.add(id);
         }
@@ -414,15 +387,8 @@ function canBeChaseTarget(piece: { color: XiangqiColor; role: string }, square: 
     return piece.color === "red" ? rank >= 5 : rank <= 4;
 }
 
-function isForceChase(attackerRole: string, targetRole: string, policy: RulePolicy): boolean {
-    if ((attackerRole === "horse" || attackerRole === "cannon") && targetRole === "rook") {
-        return true;
-    }
-    return (
-        policy.protectedMinorChase &&
-        (attackerRole === "advisor" || attackerRole === "elephant") &&
-        (targetRole === "rook" || targetRole === "horse" || targetRole === "cannon")
-    );
+function isForceChase(attackerRole: string, targetRole: string): boolean {
+    return (attackerRole === "horse" || attackerRole === "cannon") && targetRole === "rook";
 }
 
 function isProtectedAfterCapture(position: XiangqiPosition, move: XiangqiMove): boolean {

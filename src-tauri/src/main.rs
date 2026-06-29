@@ -859,16 +859,8 @@ enum XiangqiViolation {
 struct XiangqiRulePolicy {
     repetition_occurrences: usize,
     chase_level: u8,
-    chase_continuity: XiangqiChaseContinuity,
-    protected_minor_chase: bool,
     natural_draw_mode: XiangqiNaturalDrawMode,
     natural_draw: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum XiangqiChaseContinuity {
-    SamePiece,
-    AnyPiece,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -918,7 +910,7 @@ fn adjudicate_xiangqi_repetition(
         return None;
     }
     let start_index = *occurrences.get(occurrences.len().saturating_sub(2))?;
-    let cycle = classify_xiangqi_repetition_cycle(&fens, moves, start_index, policy)?;
+    let cycle = classify_xiangqi_repetition_cycle(&fens, moves, start_index)?;
     apply_xiangqi_repetition_rule(rule, cycle, policy)
 }
 
@@ -926,7 +918,6 @@ fn classify_xiangqi_repetition_cycle(
     fens: &[String],
     moves: &[GameMove],
     start_index: usize,
-    policy: XiangqiRulePolicy,
 ) -> Option<[XiangqiViolation; 2]> {
     let mut stats = [
         XiangqiSideCycleStats::default(),
@@ -947,33 +938,25 @@ fn classify_xiangqi_repetition_cycle(
         }
         stats[side_index]
             .chase_sets
-            .push(chased_xiangqi_pieces(&after, before.turn, &tracker, policy));
+            .push(chased_xiangqi_pieces(&after, before.turn, &tracker));
     }
 
     let has_any_check = stats.iter().any(|side| side.checks > 0);
     Some([
-        classify_xiangqi_side_violation(&stats[0], has_any_check, policy),
-        classify_xiangqi_side_violation(&stats[1], has_any_check, policy),
+        classify_xiangqi_side_violation(&stats[0], has_any_check),
+        classify_xiangqi_side_violation(&stats[1], has_any_check),
     ])
 }
 
 fn classify_xiangqi_side_violation(
     side: &XiangqiSideCycleStats,
     has_any_check: bool,
-    policy: XiangqiRulePolicy,
 ) -> XiangqiViolation {
     if side.moves > 0 && side.checks == side.moves {
         return XiangqiViolation::Check;
     }
     if has_any_check {
         return XiangqiViolation::Idle;
-    }
-    if policy.chase_continuity == XiangqiChaseContinuity::AnyPiece {
-        return if !side.chase_sets.is_empty() && side.chase_sets.iter().all(|set| !set.is_empty()) {
-            XiangqiViolation::Chase
-        } else {
-            XiangqiViolation::Idle
-        };
     }
     if intersect_xiangqi_chases(&side.chase_sets).is_empty() {
         XiangqiViolation::Idle
@@ -1021,56 +1004,42 @@ fn xiangqi_rule_policy(rule: XiangqiRepetitionRule) -> XiangqiRulePolicy {
         XiangqiRepetitionRule::ComputerRule => XiangqiRulePolicy {
             repetition_occurrences: 3,
             chase_level: 1,
-            chase_continuity: XiangqiChaseContinuity::SamePiece,
-            protected_minor_chase: false,
             natural_draw_mode: XiangqiNaturalDrawMode::Pikafish,
             natural_draw: true,
         },
         XiangqiRepetitionRule::ChineseRule => XiangqiRulePolicy {
             repetition_occurrences: 2,
             chase_level: 1,
-            chase_continuity: XiangqiChaseContinuity::AnyPiece,
-            protected_minor_chase: true,
             natural_draw_mode: XiangqiNaturalDrawMode::Pikafish,
             natural_draw: true,
         },
         XiangqiRepetitionRule::YitianRule => XiangqiRulePolicy {
             repetition_occurrences: 2,
             chase_level: 1,
-            chase_continuity: XiangqiChaseContinuity::SamePiece,
-            protected_minor_chase: false,
             natural_draw_mode: XiangqiNaturalDrawMode::Disabled,
             natural_draw: false,
         },
         XiangqiRepetitionRule::AllowChase => XiangqiRulePolicy {
             repetition_occurrences: 2,
             chase_level: 0,
-            chase_continuity: XiangqiChaseContinuity::SamePiece,
-            protected_minor_chase: false,
             natural_draw_mode: XiangqiNaturalDrawMode::Pikafish,
             natural_draw: true,
         },
         XiangqiRepetitionRule::NoJudgement => XiangqiRulePolicy {
             repetition_occurrences: usize::MAX,
             chase_level: 0,
-            chase_continuity: XiangqiChaseContinuity::SamePiece,
-            protected_minor_chase: false,
             natural_draw_mode: XiangqiNaturalDrawMode::Pikafish,
             natural_draw: true,
         },
         XiangqiRepetitionRule::AsianRule => XiangqiRulePolicy {
             repetition_occurrences: 2,
             chase_level: 1,
-            chase_continuity: XiangqiChaseContinuity::SamePiece,
-            protected_minor_chase: false,
             natural_draw_mode: XiangqiNaturalDrawMode::Pikafish,
             natural_draw: true,
         },
         XiangqiRepetitionRule::SkyRule => XiangqiRulePolicy {
             repetition_occurrences: 2,
             chase_level: 1,
-            chase_continuity: XiangqiChaseContinuity::SamePiece,
-            protected_minor_chase: false,
             natural_draw_mode: XiangqiNaturalDrawMode::Plain120,
             natural_draw: true,
         },
@@ -1197,7 +1166,6 @@ fn chased_xiangqi_pieces(
     position: &XiangqiPosition,
     color: XiangqiColor,
     tracker: &HashMap<(usize, usize), String>,
-    policy: XiangqiRulePolicy,
 ) -> HashSet<String> {
     let mut result = HashSet::new();
     let mut probe = position.clone();
@@ -1216,7 +1184,7 @@ fn chased_xiangqi_pieces(
             continue;
         }
         if (!is_xiangqi_protected_after_capture(&probe, mv)
-            || is_force_xiangqi_chase(attacker.role, target.role, policy))
+            || is_force_xiangqi_chase(attacker.role, target.role))
             && tracker.get(&mv.to).is_some()
         {
             result.insert(tracker[&mv.to].clone());
@@ -1242,20 +1210,8 @@ fn can_be_xiangqi_chase_target(piece: XiangqiPiece, square: (usize, usize)) -> b
     }
 }
 
-fn is_force_xiangqi_chase(
-    attacker: XiangqiRole,
-    target: XiangqiRole,
-    policy: XiangqiRulePolicy,
-) -> bool {
-    if matches!(attacker, XiangqiRole::Horse | XiangqiRole::Cannon) && target == XiangqiRole::Rook {
-        return true;
-    }
-    policy.protected_minor_chase
-        && matches!(attacker, XiangqiRole::Advisor | XiangqiRole::Elephant)
-        && matches!(
-            target,
-            XiangqiRole::Rook | XiangqiRole::Horse | XiangqiRole::Cannon
-        )
+fn is_force_xiangqi_chase(attacker: XiangqiRole, target: XiangqiRole) -> bool {
+    matches!(attacker, XiangqiRole::Horse | XiangqiRole::Cannon) && target == XiangqiRole::Rook
 }
 
 fn is_xiangqi_protected_after_capture(position: &XiangqiPosition, mv: XiangqiMove) -> bool {
@@ -3741,13 +3697,6 @@ mod xiangqi_rule_and_book_tests {
         assert_eq!(
             xiangqi_rule_policy(XiangqiRepetitionRule::AllowChase).chase_level,
             0
-        );
-        assert_eq!(
-            xiangqi_rule_policy(XiangqiRepetitionRule::ChineseRule).chase_continuity,
-            XiangqiChaseContinuity::AnyPiece
-        );
-        assert!(
-            xiangqi_rule_policy(XiangqiRepetitionRule::ChineseRule).protected_minor_chase
         );
         assert_eq!(
             xiangqi_rule_policy(XiangqiRepetitionRule::SkyRule).natural_draw_mode,
