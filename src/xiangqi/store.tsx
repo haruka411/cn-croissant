@@ -27,7 +27,7 @@ import {
   type XiangqiDrawShape,
   type XiangqiMove,
 } from "./xiangqi";
-import { adjudicateXiangqiRepetition, xiangqiNaturalDrawApplies } from "./rules";
+import { adjudicateXiangqiRepetition, xiangqiNaturalDrawReached } from "./rules";
 
 export type { XiangqiHeaders, XiangqiOrientation, XiangqiResult } from "./persistence";
 
@@ -142,7 +142,8 @@ export function createXiangqiStore(id?: string): XiangqiStore {
         const nextPath =
           options.changePosition === false ? state.path : [...parentPath, childIndex];
         const adjudication =
-          adjudicateXiangqiResult(result.position) ?? adjudicateXiangqiRepetition(root, nextPath);
+          adjudicateXiangqiResult(root, nextPath, result.position) ??
+          adjudicateXiangqiRepetition(root, nextPath);
         const headers = {
           ...state.headers,
           result: adjudication?.result ?? state.headers.result,
@@ -410,6 +411,8 @@ function defaultXiangqiState() {
 }
 
 function adjudicateXiangqiResult(
+  root: GameNode,
+  path: number[],
   position: ReturnType<typeof parseFen>,
 ): { result: XiangqiResult; reason: XiangqiResultReason } | null {
   const moves = legalMoves(position);
@@ -419,8 +422,7 @@ function adjudicateXiangqiResult(
       reason: isInCheck(position, position.turn) ? "checkmate" : "noLegalMove",
     };
   }
-  // 120 half-moves (60 full moves) without capture is the standard draw threshold.
-  if (position.halfmove >= 120 && xiangqiNaturalDrawApplies()) {
+  if (xiangqiNaturalDrawReached(root, path)) {
     return { result: "1/2-1/2", reason: "naturalDraw" };
   }
   return null;

@@ -26,7 +26,9 @@ type Violation = "idle" | "chase" | "check";
 type RulePolicy = {
     repetitionOccurrences: number;
     chaseLevel: number;
-    chineseProtectedMinorChase: boolean;
+    chaseContinuity: "samePiece" | "anyPiece";
+    protectedMinorChase: boolean;
+    naturalDrawMode: "pikafish" | "plain120" | "disabled";
     naturalDraw: boolean;
 };
 
@@ -104,6 +106,60 @@ export function xiangqiNaturalDrawApplies(
     return xiangqiRulePolicy(rule).naturalDraw;
 }
 
+export function xiangqiNaturalDrawReached(
+    root: GameNode,
+    path: number[],
+    rule: XiangqiRepetitionRule = currentXiangqiRepetitionRule(),
+): boolean {
+    const policy = xiangqiRulePolicy(rule);
+    if (!policy.naturalDraw || policy.naturalDrawMode === "disabled") return false;
+
+    const line = nodesAtPath(root, path);
+    const current = line.at(-1);
+    if (!current) return false;
+
+    if (policy.naturalDrawMode === "plain120") {
+        return parseFen(current.fen).halfmove >= 120;
+    }
+
+    let countedHalfmoves = parseFen(line[0].fen).halfmove;
+    const checks: Record<XiangqiColor, number> = { red: 0, black: 0 };
+    let skipEvasion: XiangqiColor | null = null;
+
+    for (let index = 1; index < line.length; index += 1) {
+        const before = parseFen(line[index - 1].fen);
+        const after = parseFen(line[index].fen);
+        const mover = before.turn;
+
+        if (after.halfmove === 0) {
+            countedHalfmoves = 0;
+            checks.red = 0;
+            checks.black = 0;
+            skipEvasion = null;
+            continue;
+        }
+
+        let countsForDraw = true;
+        if (skipEvasion === mover) {
+            countsForDraw = false;
+            skipEvasion = null;
+        }
+
+        if (isInCheck(after, after.turn)) {
+            checks[mover] += 1;
+            if (checks[mover] > 10) {
+                countsForDraw = false;
+                skipEvasion = after.turn;
+            }
+        }
+
+        if (countsForDraw) countedHalfmoves += 1;
+        if (countedHalfmoves >= 120) return true;
+    }
+
+    return false;
+}
+
 function isXiangqiRepetitionRule(value: unknown): value is XiangqiRepetitionRule {
     return (
         value === "AsianRule" ||
@@ -161,17 +217,23 @@ function classifyRepetitionCycle(
 
     const hasAnyCheck = stats.red.checks > 0 || stats.black.checks > 0;
     return {
-        red: classifySide(stats.red, hasAnyCheck),
-        black: classifySide(stats.black, hasAnyCheck),
+        red: classifySide(stats.red, hasAnyCheck, policy),
+        black: classifySide(stats.black, hasAnyCheck, policy),
     };
 }
 
 function classifySide(
     side: { moves: number; checks: number; chaseSets: Set<PieceIdentity>[] },
     hasAnyCheck: boolean,
+    policy: RulePolicy,
 ): Violation {
     if (side.moves > 0 && side.checks === side.moves) return "check";
     if (hasAnyCheck) return "idle";
+    if (policy.chaseContinuity === "anyPiece") {
+        return side.chaseSets.length > 0 && side.chaseSets.every((set) => set.size > 0)
+            ? "chase"
+            : "idle";
+    }
     const common = intersectAll(side.chaseSets);
     return common.size > 0 ? "chase" : "idle";
 }
@@ -204,43 +266,63 @@ function xiangqiRulePolicy(rule: XiangqiRepetitionRule): RulePolicy {
             return {
                 repetitionOccurrences: 3,
                 chaseLevel: 1,
-                chineseProtectedMinorChase: false,
+                chaseContinuity: "samePiece",
+                protectedMinorChase: false,
+                naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
         case "ChineseRule":
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 1,
-                chineseProtectedMinorChase: true,
+                chaseContinuity: "anyPiece",
+                protectedMinorChase: true,
+                naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
         case "YitianRule":
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 1,
-                chineseProtectedMinorChase: false,
+                chaseContinuity: "samePiece",
+                protectedMinorChase: false,
+                naturalDrawMode: "disabled",
                 naturalDraw: false,
             };
         case "AllowChase":
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 0,
-                chineseProtectedMinorChase: false,
+                chaseContinuity: "samePiece",
+                protectedMinorChase: false,
+                naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
         case "NoJudgement":
             return {
                 repetitionOccurrences: Number.POSITIVE_INFINITY,
                 chaseLevel: 0,
-                chineseProtectedMinorChase: false,
+                chaseContinuity: "samePiece",
+                protectedMinorChase: false,
+                naturalDrawMode: "pikafish",
                 naturalDraw: true,
             };
         case "AsianRule":
+            return {
+                repetitionOccurrences: 2,
+                chaseLevel: 1,
+                chaseContinuity: "samePiece",
+                protectedMinorChase: false,
+                naturalDrawMode: "pikafish",
+                naturalDraw: true,
+            };
         case "SkyRule":
             return {
                 repetitionOccurrences: 2,
                 chaseLevel: 1,
-                chineseProtectedMinorChase: false,
+                chaseContinuity: "samePiece",
+                protectedMinorChase: false,
+                naturalDrawMode: "plain120",
                 naturalDraw: true,
             };
     }
@@ -337,7 +419,7 @@ function isForceChase(attackerRole: string, targetRole: string, policy: RulePoli
         return true;
     }
     return (
-        policy.chineseProtectedMinorChase &&
+        policy.protectedMinorChase &&
         (attackerRole === "advisor" || attackerRole === "elephant") &&
         (targetRole === "rook" || targetRole === "horse" || targetRole === "cannon")
     );
