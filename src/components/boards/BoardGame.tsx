@@ -1,8 +1,10 @@
 import {
   Box,
   Button,
+  Checkbox,
   Divider,
   Group,
+  NumberInput,
   Paper,
   Portal,
   ScrollArea,
@@ -11,6 +13,7 @@ import {
   Text,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   IconArrowBackUp,
   IconArrowsExchange,
@@ -22,7 +25,7 @@ import { useAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { match } from "ts-pattern";
-import { commands, events, type GameConfig, type GameMove, type GameResult } from "@/bindings";
+import { commands, events, type GameConfig, type GameMove, type GameResult, type GameState } from "@/bindings";
 import {
   currentGameStateAtom,
   currentGameStartFromCurrentAtom,
@@ -30,12 +33,21 @@ import {
   currentPlayersAtom,
   currentTabAtom,
   gameInputColorAtom,
+  gameOpeningBookEnabledAtom,
+  gameOpeningBookMaxPlyAtom,
+  gameOpeningBookPathAtom,
   gamePlayer1SettingsAtom,
   gamePlayer2SettingsAtom,
   gameSameTimeControlAtom,
+  xiangqiRepetitionRuleAtom,
 } from "@/state/atoms";
 import { useXiangqiStore } from "@/xiangqi/store";
-import { INITIAL_XIANGQI_FEN, parseUciMove, traverseMainline } from "@/xiangqi/xiangqi";
+import {
+  getNodeAtPath,
+  INITIAL_XIANGQI_FEN,
+  parseUciMove,
+  traverseMainline,
+} from "@/xiangqi/xiangqi";
 import {
   resultReasonTranslationKey,
   type XiangqiResult,
@@ -45,6 +57,7 @@ import XiangqiBoardControls from "../xiangqi/XiangqiBoardControls";
 import XiangqiGameNotation from "../xiangqi/XiangqiGameNotation";
 import XiangqiMoveControls from "../xiangqi/XiangqiMoveControls";
 import Board from "./Board";
+import FileInput from "../common/FileInput";
 import { OpponentForm, type OpponentSettings } from "./OpponentForm";
 
 function BoardGame() {
@@ -58,11 +71,18 @@ function BoardGame() {
   const [players, setPlayers] = useAtom(currentPlayersAtom);
   const [currentTab, setCurrentTab] = useAtom(currentTabAtom);
   const [gameId, setGameId] = useAtom(currentGameIdAtom);
+  const [openingBookPath, setOpeningBookPath] = useAtom(gameOpeningBookPathAtom);
+  const [openingBookEnabled, setOpeningBookEnabled] = useAtom(gameOpeningBookEnabledAtom);
+  const [openingBookMaxPly, setOpeningBookMaxPly] = useAtom(gameOpeningBookMaxPlyAtom);
+  const [xiangqiRule] = useAtom(xiangqiRepetitionRuleAtom);
+  const gameInitialFen = useRef(INITIAL_XIANGQI_FEN);
+  const gameStartPath = useRef<number[]>([]);
   const boardRef = useRef(null);
   const resetGame = useXiangqiStore((s) => s.reset);
   const root = useXiangqiStore((s) => s.root);
   const makeXiangqiMove = useXiangqiStore((s) => s.makeMove);
-  const goToEnd = useXiangqiStore((s) => s.goToEnd);
+  const goToMove = useXiangqiStore((s) => s.goToMove);
+  const deleteMovesFrom = useXiangqiStore((s) => s.deleteMovesFrom);
   const headers = useXiangqiStore((s) => s.headers);
   const setHeaders = useXiangqiStore((s) => s.setHeaders);
   const setFen = useXiangqiStore((s) => s.setFen);
@@ -98,6 +118,8 @@ function BoardGame() {
     },
     [headers, setGameState, setHeaders],
   );
+  const finishGameRef = useRef(finishGame);
+  finishGameRef.current = finishGame;
 
   useEffect(() => {
     if (gameState === "playing" && headers.result !== "*") {
@@ -128,32 +150,82 @@ function BoardGame() {
   }
 
   const syncTreeWithMoves = useCallback(
-    (backendMoves: GameMove[], initialFen?: string) => {
-      if (initialFen && root.fen !== initialFen) {
-        setFen(initialFen);
+    (backendMoves: GameMove[], initialFen?: string, startPath: number[] = gameStartPath.current) => {
+      const baseFen = initialFen ?? root.fen;
+      let baseNode;
+      try {
+        baseNode = getNodeAtPath(root, startPath);
+      } catch {
+        setFen(baseFen);
+        gameStartPath.current = [];
+        for (const move of backendMoves) {
+          const parsed = parseUciMove(move.uci);
+          if (parsed) {
+            makeXiangqiMove(parsed, { mainline: true });
+          }
+        }
+        return;
       }
-      const localMoves = traverseMainline(root)
+
+      if (baseNode.fen !== baseFen) {
+        setFen(baseFen);
+        gameStartPath.current = [];
+        for (const move of backendMoves) {
+          const parsed = parseUciMove(move.uci);
+          if (parsed) {
+            makeXiangqiMove(parsed, { mainline: true });
+          }
+        }
+        return;
+      }
+
+      const localMoves = traverseMainline(baseNode)
         .slice(1)
         .map((node) => node.move)
         .filter((move): move is string => Boolean(move));
+
       if (
         localMoves.length === backendMoves.length &&
         localMoves.every((move, index) => move === backendMoves[index].uci)
       ) {
-        goToEnd();
+        goToMove(pathAfterMoves(startPath, backendMoves.length));
         return;
       }
-      setFen(initialFen ?? root.fen);
+
+      const localIsBackendPrefix =
+        localMoves.length < backendMoves.length &&
+        localMoves.every((move, index) => move === backendMoves[index].uci);
+      if (localIsBackendPrefix) {
+        goToMove(pathAfterMoves(startPath, localMoves.length));
+        for (const move of backendMoves.slice(localMoves.length)) {
+          const parsed = parseUciMove(move.uci);
+          if (parsed) {
+            makeXiangqiMove(parsed, { mainline: true });
+          }
+        }
+        return;
+      }
+
+      const backendIsLocalPrefix =
+        backendMoves.length < localMoves.length &&
+        backendMoves.every((move, index) => move.uci === localMoves[index]);
+      if (backendIsLocalPrefix) {
+        deleteMovesFrom(pathAfterMoves(startPath, backendMoves.length + 1));
+        return;
+      }
+
+      goToMove(startPath);
       for (const move of backendMoves) {
         const parsed = parseUciMove(move.uci);
         if (parsed) {
           makeXiangqiMove(parsed, { mainline: true });
         }
       }
-      goToEnd();
     },
-    [goToEnd, makeXiangqiMove, root, setFen],
+    [deleteMovesFrom, goToMove, makeXiangqiMove, root, setFen],
   );
+  const syncTreeWithMovesRef = useRef(syncTreeWithMoves);
+  syncTreeWithMovesRef.current = syncTreeWithMoves;
 
   const handleMove = useCallback(
     (uci: string) => {
@@ -175,13 +247,28 @@ function BoardGame() {
     if (gameState !== "playing" || !gameId) return;
 
     const currentGameId = gameId;
+    let disposed = false;
+
+    const syncBackendState = (state: GameState) => {
+      if (disposed) return;
+      setClocks({
+        red: state.whiteTime !== null ? Number(state.whiteTime) : null,
+        black: state.blackTime !== null ? Number(state.blackTime) : null,
+      });
+      syncTreeWithMovesRef.current(state.moves, gameInitialFen.current, gameStartPath.current);
+      if (state.status !== "playing" && typeof state.status === "object" && "finished" in state.status) {
+        const outcome = gameResultToOutcome(state.status.finished.result);
+        finishGameRef.current(outcome.result, outcome.reason);
+      }
+    };
+
     const unlistenMove = events.gameMoveEvent.listen(({ payload }) => {
       if (payload.gameId !== currentGameId) return;
       setClocks({
         red: payload.whiteTime !== null ? Number(payload.whiteTime) : null,
         black: payload.blackTime !== null ? Number(payload.blackTime) : null,
       });
-      syncTreeWithMoves(payload.moves);
+      syncTreeWithMovesRef.current(payload.moves, gameInitialFen.current, gameStartPath.current);
     });
     const unlistenClock = events.clockUpdateEvent.listen(({ payload }) => {
       if (payload.gameId !== currentGameId) return;
@@ -192,17 +279,27 @@ function BoardGame() {
     });
     const unlistenGameOver = events.gameOverEvent.listen(({ payload }) => {
       if (payload.gameId !== currentGameId) return;
-      syncTreeWithMoves(payload.moves);
+      syncTreeWithMovesRef.current(payload.moves, gameInitialFen.current, gameStartPath.current);
       const outcome = gameResultToOutcome(payload.result);
-      finishGame(outcome.result, outcome.reason);
+      finishGameRef.current(outcome.result, outcome.reason);
+    });
+
+    Promise.all([unlistenMove, unlistenClock, unlistenGameOver]).then(() => {
+      if (disposed) return;
+      commands.getGameState(currentGameId).then((result) => {
+        if (result.status === "ok") {
+          syncBackendState(result.data);
+        }
+      });
     });
 
     return () => {
+      disposed = true;
       unlistenMove.then((fn) => fn());
       unlistenClock.then((fn) => fn());
       unlistenGameOver.then((fn) => fn());
     };
-  }, [finishGame, gameId, gameState, syncTreeWithMoves]);
+  }, [gameId, gameState]);
 
   async function startGame() {
     const nextPlayers = getPlayers();
@@ -213,8 +310,13 @@ function BoardGame() {
       setError(t("Board.Game.SelectEngineBeforeStart"));
       return;
     }
+    if (openingBookEnabled && !openingBookPath) {
+      setError(t("Board.Game.SelectOpeningBookBeforeStart"));
+      return;
+    }
 
-    const startFen = gameStartFromCurrent ? root.fen : INITIAL_XIANGQI_FEN;
+    const startFen = gameStartFromCurrent ? currentNode.fen : INITIAL_XIANGQI_FEN;
+    const startPath = gameStartFromCurrent ? [...currentPath] : [];
     if (!gameStartFromCurrent) {
       resetGame();
     }
@@ -246,7 +348,14 @@ function BoardGame() {
           : null,
         initialFen,
         initialMoves: [],
-        openingBook: null,
+        openingBook:
+          openingBookEnabled && openingBookPath
+            ? {
+                path: openingBookPath,
+                maxPly: openingBookMaxPly,
+              }
+            : null,
+        xiangqiRule,
       } as GameConfig;
 
       const result = await commands.startGame(newGameId, config);
@@ -255,6 +364,8 @@ function BoardGame() {
         return;
       }
       const state = result.data;
+      gameInitialFen.current = state.initialFen;
+      gameStartPath.current = startPath;
       setPlayers({
         white: nextPlayers.white,
         black: nextPlayers.black,
@@ -265,8 +376,10 @@ function BoardGame() {
         black: state.blackTime !== null ? Number(state.blackTime) : null,
       });
       setHeaders(nextHeaders);
-      if (!gameStartFromCurrent) {
-        syncTreeWithMoves(state.moves, startFen);
+      if (state.moves.length > 0) {
+        syncTreeWithMoves(state.moves, state.initialFen, startPath);
+      } else {
+        goToMove(startPath);
       }
       setGameState("playing");
       setGameStartFromCurrent(false);
@@ -282,6 +395,8 @@ function BoardGame() {
       setGameId(null);
     }
     resetGame();
+    gameInitialFen.current = INITIAL_XIANGQI_FEN;
+    gameStartPath.current = [];
     setGameState("settingUp");
     setGameStartFromCurrent(false);
     setClocks({ red: null, black: null });
@@ -304,12 +419,30 @@ function BoardGame() {
       commands.abortGame(gameId);
       setGameId(null);
     }
+    gameInitialFen.current = INITIAL_XIANGQI_FEN;
+    gameStartPath.current = [];
     setCurrentTab((tab) => ({ ...tab, type: "analysis" }));
     setGameState("settingUp");
   }
 
   const hasEngine = players.white?.type === "engine" || players.black?.type === "engine";
   const canUndo = findUndoPath(currentPath, players).length > 0;
+
+  async function chooseOpeningBook() {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [
+        {
+          name: t("Board.Opponent.OpeningBookFile"),
+          extensions: ["obk", "xqb", "pfBook"],
+        },
+      ],
+    });
+    if (!selected || typeof selected !== "string") return;
+    setOpeningBookPath(selected);
+    setOpeningBookEnabled(true);
+  }
 
   return (
     <>
@@ -375,6 +508,38 @@ function BoardGame() {
                         { value: "separate", label: t("Board.Game.SeparateClocks") },
                       ]}
                     />
+                  </Paper>
+                  <Paper withBorder p="sm">
+                    <Stack gap="xs">
+                      <Checkbox
+                        checked={openingBookEnabled}
+                        onChange={(event) => setOpeningBookEnabled(event.currentTarget.checked)}
+                        label={t("Board.Opponent.EnableOpeningBook")}
+                      />
+                      <Group align="end" wrap="nowrap">
+                        <FileInput
+                          onClick={() => void chooseOpeningBook()}
+                          filename={openingBookPath}
+                        />
+                        <NumberInput
+                          label={t("Board.Opponent.OpeningBookMaxPly")}
+                          min={1}
+                          max={200}
+                          step={1}
+                          value={openingBookMaxPly}
+                          onChange={(value) => {
+                            const next = typeof value === "number" ? value : Number(value);
+                            if (Number.isFinite(next)) {
+                              setOpeningBookMaxPly(Math.max(1, Math.trunc(next)));
+                            }
+                          }}
+                          w="8rem"
+                        />
+                      </Group>
+                      <Text size="xs" c="dimmed">
+                        {t("Board.Opponent.OpeningBookDesc")}
+                      </Text>
+                    </Stack>
                   </Paper>
                   {error && (
                     <Text c="red" size="sm">
@@ -515,17 +680,18 @@ function toPlayerConfig(player: OpponentSettings, fallback: string) {
   }
 
   const engineSettings = player.engineSettings || player.engine?.settings || [];
+  const options = engineSettings
+    .filter((setting) => setting.value !== null && setting.value !== undefined)
+    .map((setting) => ({
+      name: setting.name,
+      value: String(setting.value),
+    }));
   return {
     type: "engine" as const,
     name: player.engine?.name || fallback,
     path: player.engine?.path || "",
     protocol: player.engine?.protocol ?? "ucci",
-    options: engineSettings
-      .filter((setting) => setting.value !== null && setting.value !== undefined)
-      .map((setting) => ({
-        name: setting.name,
-        value: String(setting.value),
-      })),
+    options,
     go: player.timeControl ? null : player.go,
   };
 }
@@ -546,6 +712,11 @@ function gameResultToOutcome(result: GameResult): {
 function gameEndReasonToXiangqiReason(reason: GameResult["reason"]): XiangqiResultReason {
   if (reason === "timeout") return "timeout";
   if (reason === "resignation") return "resignation";
+  if (reason === "noLegalMove") return "noLegalMove";
+  if (reason === "perpetualCheck") return "perpetualCheck";
+  if (reason === "perpetualChase") return "perpetualChase";
+  if (reason === "naturalDraw") return "naturalDraw";
+  if (reason === "repetition") return "repetition";
   return "checkmate";
 }
 
@@ -570,6 +741,10 @@ function findUndoPath(
     }
   }
   return [];
+}
+
+function pathAfterMoves(startPath: number[], moveCount: number) {
+  return [...startPath, ...Array.from({ length: moveCount }, () => 0)];
 }
 
 function formatClock(milliseconds: number | null): string {

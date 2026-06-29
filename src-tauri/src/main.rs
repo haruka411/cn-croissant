@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -16,6 +16,11 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager, Window};
+
+mod xiangqi_opening_book;
+mod xiangqi_zobrist_table;
+
+use xiangqi_opening_book::{XiangqiOpeningBook, XiangqiOpeningBookConfig};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -102,7 +107,9 @@ type GameId = String;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum XiangqiPlayerConfig {
-    Human { name: String },
+    Human {
+        name: String,
+    },
     Engine {
         name: String,
         path: String,
@@ -130,8 +137,26 @@ struct XiangqiGameConfig {
     initial_fen: Option<String>,
     #[serde(default)]
     initial_moves: Vec<String>,
-    #[allow(dead_code)]
-    opening_book: Option<serde_json::Value>,
+    opening_book: Option<XiangqiOpeningBookConfig>,
+    #[serde(default)]
+    xiangqi_rule: XiangqiRepetitionRule,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+enum XiangqiRepetitionRule {
+    AsianRule,
+    ChineseRule,
+    SkyRule,
+    ComputerRule,
+    YitianRule,
+    AllowChase,
+    NoJudgement,
+}
+
+impl Default for XiangqiRepetitionRule {
+    fn default() -> Self {
+        Self::AsianRule
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -153,6 +178,11 @@ enum GameResult {
 #[serde(rename_all = "camelCase")]
 enum GameEndReason {
     Checkmate,
+    NoLegalMove,
+    PerpetualCheck,
+    PerpetualChase,
+    NaturalDraw,
+    Repetition,
     Timeout,
     Resignation,
     Abandonment,
@@ -315,6 +345,7 @@ struct XiangqiGameController {
     black_engine: Option<XiangqiGameEngine>,
     white_engine_pid: Option<u32>,
     black_engine_pid: Option<u32>,
+    opening_book: Option<XiangqiOpeningBook>,
     shutdown: bool,
     engine_thinking: bool,
 }
@@ -405,7 +436,13 @@ impl XiangqiPosition {
             }
         }
 
-        let turn = match parts.get(1).copied().unwrap_or("w").to_ascii_lowercase().as_str() {
+        let turn = match parts
+            .get(1)
+            .copied()
+            .unwrap_or("w")
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "w" | "r" | "red" => XiangqiColor::Red,
             "b" | "black" => XiangqiColor::Black,
             raw => return Err(format!("invalid side to move: {}", raw)),
@@ -461,7 +498,11 @@ impl XiangqiPosition {
             ranks.push(text);
         }
 
-        let turn = if self.turn == XiangqiColor::Red { "w" } else { "b" };
+        let turn = if self.turn == XiangqiColor::Red {
+            "w"
+        } else {
+            "b"
+        };
         format!(
             "{} {} - - {} {}",
             ranks.join("/"),
@@ -701,7 +742,11 @@ fn pseudo_moves_for_piece(
             }
         }
         XiangqiRole::Pawn => {
-            let forward = if piece.color == XiangqiColor::Red { 1 } else { -1 };
+            let forward = if piece.color == XiangqiColor::Red {
+                1
+            } else {
+                -1
+            };
             push_if_available(&mut moves, position, piece, from, file, rank + forward);
             let crossed_river = match piece.color {
                 XiangqiColor::Red => rank >= 5,
@@ -801,6 +846,267 @@ fn apply_xiangqi_move(
         return Err(format!("illegal move: {}", make_xiangqi_uci_move(mv)));
     }
     apply_xiangqi_move_unchecked(position, mv)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XiangqiViolation {
+    Idle,
+    Chase,
+    Check,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum XiangqiRuleVerdict {
+    Draw(DrawReason),
+    RedLoses(GameEndReason),
+    BlackLoses(GameEndReason),
+}
+
+#[derive(Default)]
+struct XiangqiSideCycleStats {
+    moves: u32,
+    checks: u32,
+    chase_sets: Vec<HashSet<String>>,
+}
+
+fn adjudicate_xiangqi_repetition(
+    initial_fen: &str,
+    moves: &[GameMove],
+    rule: XiangqiRepetitionRule,
+) -> Option<XiangqiRuleVerdict> {
+    if rule == XiangqiRepetitionRule::NoJudgement {
+        return None;
+    }
+
+    let mut fens = Vec::with_capacity(moves.len() + 1);
+    fens.push(initial_fen.to_string());
+    fens.extend(moves.iter().map(|mv| mv.fen_after.clone()));
+    let current_key = XiangqiPosition::parse(fens.last()?).ok()?.position_key();
+    let occurrences: Vec<usize> = fens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, fen)| {
+            let key = XiangqiPosition::parse(fen).ok()?.position_key();
+            (key == current_key).then_some(index)
+        })
+        .collect();
+    if occurrences.len() < 3 {
+        return None;
+    }
+    let start_index = *occurrences.get(occurrences.len().saturating_sub(2))?;
+    let cycle = classify_xiangqi_repetition_cycle(&fens, moves, start_index)?;
+    apply_xiangqi_repetition_rule(rule, cycle)
+}
+
+fn classify_xiangqi_repetition_cycle(
+    fens: &[String],
+    moves: &[GameMove],
+    start_index: usize,
+) -> Option<[XiangqiViolation; 2]> {
+    let mut stats = [
+        XiangqiSideCycleStats::default(),
+        XiangqiSideCycleStats::default(),
+    ];
+    let mut tracker =
+        create_xiangqi_piece_tracker(&XiangqiPosition::parse(fens.get(start_index)?).ok()?);
+
+    for index in (start_index + 1)..fens.len() {
+        let before = XiangqiPosition::parse(fens.get(index - 1)?).ok()?;
+        let after = XiangqiPosition::parse(fens.get(index)?).ok()?;
+        let mv = parse_xiangqi_uci_move(&moves.get(index - 1)?.uci).ok()?;
+        tracker = update_xiangqi_piece_tracker(&tracker, mv);
+        let side_index = color_index(before.turn);
+        stats[side_index].moves += 1;
+        if is_xiangqi_in_check(&after, after.turn) {
+            stats[side_index].checks += 1;
+        }
+        stats[side_index]
+            .chase_sets
+            .push(chased_xiangqi_pieces(&after, before.turn, &tracker));
+    }
+
+    let has_any_check = stats.iter().any(|side| side.checks > 0);
+    Some([
+        classify_xiangqi_side_violation(&stats[0], has_any_check),
+        classify_xiangqi_side_violation(&stats[1], has_any_check),
+    ])
+}
+
+fn classify_xiangqi_side_violation(
+    side: &XiangqiSideCycleStats,
+    has_any_check: bool,
+) -> XiangqiViolation {
+    if side.moves > 0 && side.checks == side.moves {
+        return XiangqiViolation::Check;
+    }
+    if has_any_check {
+        return XiangqiViolation::Idle;
+    }
+    if intersect_xiangqi_chases(&side.chase_sets).is_empty() {
+        XiangqiViolation::Idle
+    } else {
+        XiangqiViolation::Chase
+    }
+}
+
+fn apply_xiangqi_repetition_rule(
+    rule: XiangqiRepetitionRule,
+    cycle: [XiangqiViolation; 2],
+) -> Option<XiangqiRuleVerdict> {
+    if cycle == [XiangqiViolation::Idle, XiangqiViolation::Idle] {
+        return Some(XiangqiRuleVerdict::Draw(DrawReason::ThreefoldRepetition));
+    }
+    let chase_level = if rule == XiangqiRepetitionRule::AllowChase {
+        0
+    } else {
+        1
+    };
+    let red = xiangqi_violation_level(cycle[0], chase_level);
+    let black = xiangqi_violation_level(cycle[1], chase_level);
+    if red == black {
+        let reason = if red == 2 {
+            DrawReason::ThreefoldRepetition
+        } else if red == 1 {
+            DrawReason::ThreefoldRepetition
+        } else {
+            DrawReason::ThreefoldRepetition
+        };
+        return Some(XiangqiRuleVerdict::Draw(reason));
+    }
+    if red > black {
+        Some(XiangqiRuleVerdict::RedLoses(xiangqi_violation_reason(
+            cycle[0],
+        )))
+    } else {
+        Some(XiangqiRuleVerdict::BlackLoses(xiangqi_violation_reason(
+            cycle[1],
+        )))
+    }
+}
+
+fn xiangqi_violation_level(violation: XiangqiViolation, chase_level: u8) -> u8 {
+    match violation {
+        XiangqiViolation::Idle => 0,
+        XiangqiViolation::Chase => chase_level,
+        XiangqiViolation::Check => 2,
+    }
+}
+
+fn xiangqi_violation_reason(violation: XiangqiViolation) -> GameEndReason {
+    match violation {
+        XiangqiViolation::Check => GameEndReason::PerpetualCheck,
+        XiangqiViolation::Chase => GameEndReason::PerpetualChase,
+        XiangqiViolation::Idle => GameEndReason::Repetition,
+    }
+}
+
+fn color_index(color: XiangqiColor) -> usize {
+    if color == XiangqiColor::Red {
+        0
+    } else {
+        1
+    }
+}
+
+fn create_xiangqi_piece_tracker(position: &XiangqiPosition) -> HashMap<(usize, usize), String> {
+    let mut tracker = HashMap::new();
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for rank in 0..10 {
+        for file in 0..9 {
+            if let Some(piece) = position.board[rank][file] {
+                let key = format!("{:?}:{:?}", piece.color, piece.role);
+                let count = counts.entry(key.clone()).or_insert(0);
+                *count += 1;
+                tracker.insert((file, rank), format!("{}:{}", key, count));
+            }
+        }
+    }
+    tracker
+}
+
+fn update_xiangqi_piece_tracker(
+    tracker: &HashMap<(usize, usize), String>,
+    mv: XiangqiMove,
+) -> HashMap<(usize, usize), String> {
+    let mut next = tracker.clone();
+    let id = next.remove(&mv.from);
+    next.remove(&mv.to);
+    if let Some(id) = id {
+        next.insert(mv.to, id);
+    }
+    next
+}
+
+fn chased_xiangqi_pieces(
+    position: &XiangqiPosition,
+    color: XiangqiColor,
+    tracker: &HashMap<(usize, usize), String>,
+) -> HashSet<String> {
+    let mut result = HashSet::new();
+    let mut probe = position.clone();
+    probe.turn = color;
+    for mv in legal_xiangqi_moves(&probe) {
+        let Some(attacker) = position.board[mv.from.1][mv.from.0] else {
+            continue;
+        };
+        let Some(target) = position.board[mv.to.1][mv.to.0] else {
+            continue;
+        };
+        if target.color == color
+            || !can_be_xiangqi_chase_attacker(attacker.role)
+            || !can_be_xiangqi_chase_target(target, mv.to)
+        {
+            continue;
+        }
+        if (!is_xiangqi_protected_after_capture(&probe, mv)
+            || is_force_xiangqi_chase(attacker.role, target.role))
+            && tracker.get(&mv.to).is_some()
+        {
+            result.insert(tracker[&mv.to].clone());
+        }
+    }
+    result
+}
+
+fn can_be_xiangqi_chase_attacker(role: XiangqiRole) -> bool {
+    !matches!(role, XiangqiRole::King | XiangqiRole::Pawn)
+}
+
+fn can_be_xiangqi_chase_target(piece: XiangqiPiece, square: (usize, usize)) -> bool {
+    if piece.role == XiangqiRole::King {
+        return false;
+    }
+    if piece.role != XiangqiRole::Pawn {
+        return true;
+    }
+    match piece.color {
+        XiangqiColor::Red => square.1 >= 5,
+        XiangqiColor::Black => square.1 <= 4,
+    }
+}
+
+fn is_force_xiangqi_chase(attacker: XiangqiRole, target: XiangqiRole) -> bool {
+    matches!(attacker, XiangqiRole::Horse | XiangqiRole::Cannon) && target == XiangqiRole::Rook
+}
+
+fn is_xiangqi_protected_after_capture(position: &XiangqiPosition, mv: XiangqiMove) -> bool {
+    let Ok(after) = apply_xiangqi_move(position, mv) else {
+        return true;
+    };
+    legal_xiangqi_moves(&after.position)
+        .iter()
+        .any(|reply| reply.to == mv.to)
+}
+
+fn intersect_xiangqi_chases(sets: &[HashSet<String>]) -> HashSet<String> {
+    let Some(first) = sets.first() else {
+        return HashSet::new();
+    };
+    let mut result = first.clone();
+    for set in &sets[1..] {
+        result.retain(|value| set.contains(value));
+    }
+    result
 }
 
 impl XiangqiGameEngine {
@@ -913,6 +1219,11 @@ impl XiangqiGameController {
             .initial_fen
             .clone()
             .unwrap_or_else(|| INITIAL_XIANGQI_FEN.to_string());
+        let opening_book = config
+            .opening_book
+            .clone()
+            .map(XiangqiOpeningBook::new)
+            .transpose()?;
         let clock = if config.white_time_control.is_some() || config.black_time_control.is_some() {
             Some(XiangqiClockState {
                 white_time: config.white_time_control.as_ref().map(|tc| tc.initial_time),
@@ -946,6 +1257,7 @@ impl XiangqiGameController {
             black_engine: None,
             white_engine_pid: None,
             black_engine_pid: None,
+            opening_book,
             shutdown: false,
             engine_thinking: false,
         };
@@ -985,7 +1297,10 @@ impl XiangqiGameController {
     }
 
     fn is_engine_turn(&self) -> bool {
-        matches!(self.current_turn_player(), XiangqiPlayerConfig::Engine { .. })
+        matches!(
+            self.current_turn_player(),
+            XiangqiPlayerConfig::Engine { .. }
+        )
     }
 
     fn apply_move(&mut self, uci: &str) -> Result<GameMove, String> {
@@ -1112,10 +1427,18 @@ impl XiangqiGameController {
                     }
                 }
             } else {
-                GameStatus::Finished {
-                    result: GameResult::Draw {
-                        reason: DrawReason::Stalemate,
-                    },
+                if self.position.turn == XiangqiColor::Red {
+                    GameStatus::Finished {
+                        result: GameResult::BlackWins {
+                            reason: GameEndReason::NoLegalMove,
+                        },
+                    }
+                } else {
+                    GameStatus::Finished {
+                        result: GameResult::WhiteWins {
+                            reason: GameEndReason::NoLegalMove,
+                        },
+                    }
                 }
             };
             return;
@@ -1137,9 +1460,24 @@ impl XiangqiGameController {
             .unwrap_or(0)
             >= 3
         {
-            self.status = GameStatus::Finished {
-                result: GameResult::Draw {
-                    reason: DrawReason::ThreefoldRepetition,
+            self.status = match adjudicate_xiangqi_repetition(
+                &self.initial_fen,
+                &self.moves,
+                self.config.xiangqi_rule,
+            ) {
+                Some(XiangqiRuleVerdict::Draw(reason)) => GameStatus::Finished {
+                    result: GameResult::Draw { reason },
+                },
+                Some(XiangqiRuleVerdict::RedLoses(reason)) => GameStatus::Finished {
+                    result: GameResult::BlackWins { reason },
+                },
+                Some(XiangqiRuleVerdict::BlackLoses(reason)) => GameStatus::Finished {
+                    result: GameResult::WhiteWins { reason },
+                },
+                None => GameStatus::Finished {
+                    result: GameResult::Draw {
+                        reason: DrawReason::ThreefoldRepetition,
+                    },
                 },
             };
         }
@@ -1151,7 +1489,11 @@ impl XiangqiGameController {
         };
         let elapsed = clock.last_tick.elapsed().as_millis() as u64;
         if self.position.turn == XiangqiColor::Red {
-            if clock.white_time.map(|wt| wt.saturating_sub(elapsed) == 0).unwrap_or(false) {
+            if clock
+                .white_time
+                .map(|wt| wt.saturating_sub(elapsed) == 0)
+                .unwrap_or(false)
+            {
                 return Some(GameResult::BlackWins {
                     reason: GameEndReason::Timeout,
                 });
@@ -1226,12 +1568,7 @@ fn emit_game_move_event(window: &Window, game_id: &str, controller: &XiangqiGame
     );
 }
 
-fn emit_game_over_event(
-    window: &Window,
-    game_id: &str,
-    result: GameResult,
-    moves: Vec<GameMove>,
-) {
+fn emit_game_over_event(window: &Window, game_id: &str, result: GameResult, moves: Vec<GameMove>) {
     let _ = window.emit(
         "game-over-event",
         GameOverEvent {
@@ -1297,11 +1634,113 @@ fn maybe_start_xiangqi_engine(
     });
 }
 
+fn read_xiangqi_bestmove(engine: &mut XiangqiGameEngine) -> Result<String, String> {
+    loop {
+        let line = read_line(&mut engine.runtime, &mut engine.logs)?;
+        if let Some(bestmove) = parse_bestmove(&line) {
+            return Ok(bestmove);
+        }
+    }
+}
+
+fn is_valid_xiangqi_bestmove(bestmove: &str) -> bool {
+    let bestmove = bestmove.trim();
+    !bestmove.is_empty() && bestmove != "0000" && parse_xiangqi_uci_move(bestmove).is_ok()
+}
+
+fn xiangqi_game_has_legal_engine_move(
+    controller: &Arc<Mutex<XiangqiGameController>>,
+    turn: XiangqiColor,
+) -> Result<bool, String> {
+    let ctrl = controller
+        .lock()
+        .map_err(|_| "game controller unavailable".to_string())?;
+    if ctrl.shutdown || ctrl.status != GameStatus::Playing || ctrl.position.turn != turn {
+        return Ok(false);
+    }
+    Ok(!legal_xiangqi_moves(&ctrl.position).is_empty())
+}
+
+fn find_xiangqi_opening_book_move(
+    controller: &Arc<Mutex<XiangqiGameController>>,
+) -> Result<Option<(XiangqiColor, String)>, String> {
+    let (turn, position, book, ply) = {
+        let ctrl = controller
+            .lock()
+            .map_err(|_| "game controller unavailable".to_string())?;
+        if ctrl.shutdown || ctrl.status != GameStatus::Playing || !ctrl.is_engine_turn() {
+            return Ok(None);
+        }
+        let Some(book) = ctrl.opening_book.clone() else {
+            return Ok(None);
+        };
+        (
+            ctrl.position.turn,
+            ctrl.position.clone(),
+            book,
+            ctrl.moves.len(),
+        )
+    };
+
+    if ply >= book.max_ply() {
+        return Ok(None);
+    }
+
+    let book_moves = match book.query(&position) {
+        Ok(book_moves) => book_moves,
+        Err(err) => {
+            eprintln!("failed to query Xiangqi opening book: {err}");
+            return Ok(None);
+        }
+    };
+
+    for book_move in book_moves {
+        let Ok(parsed) = parse_xiangqi_uci_move(&book_move.uci) else {
+            continue;
+        };
+        if apply_xiangqi_move(&position, parsed).is_ok() {
+            return Ok(Some((turn, book_move.uci)));
+        }
+    }
+
+    Ok(None)
+}
+
 fn request_xiangqi_game_engine_move(
     game_id: &str,
     controller: &Arc<Mutex<XiangqiGameController>>,
     window: &Window,
 ) -> Result<(), String> {
+    if let Some((book_turn, book_uci)) = find_xiangqi_opening_book_move(controller)? {
+        let mut start_next_engine = false;
+        {
+            let mut ctrl = controller
+                .lock()
+                .map_err(|_| "game controller unavailable".to_string())?;
+            ctrl.engine_thinking = false;
+            if ctrl.shutdown
+                || ctrl.status != GameStatus::Playing
+                || ctrl.position.turn != book_turn
+            {
+                return Ok(());
+            }
+            ctrl.apply_move(&book_uci)?;
+            emit_game_move_event(window, game_id, &ctrl);
+            if let GameStatus::Finished { result } = ctrl.status.clone() {
+                ctrl.shutdown = true;
+                emit_game_over_event(window, game_id, result, ctrl.moves.clone());
+            } else if ctrl.is_engine_turn() {
+                start_next_engine = true;
+            }
+        }
+
+        if start_next_engine {
+            maybe_start_xiangqi_engine(window, game_id, controller);
+        }
+
+        return Ok(());
+    }
+
     let (turn, initial_fen, moves, go_mode) = {
         let ctrl = controller
             .lock()
@@ -1339,7 +1778,11 @@ fn request_xiangqi_game_engine_move(
         } else {
             go.unwrap_or(GoMode::Depth(20))
         };
-        let moves = ctrl.moves.iter().map(|mv| mv.uci.clone()).collect::<Vec<_>>();
+        let moves = ctrl
+            .moves
+            .iter()
+            .map(|mv| mv.uci.clone())
+            .collect::<Vec<_>>();
         (turn, ctrl.initial_fen.clone(), moves, go_mode)
     };
 
@@ -1364,12 +1807,28 @@ fn request_xiangqi_game_engine_move(
     )?;
     send_engine_go(&mut engine.runtime.stdin, &go_mode, &mut engine.logs)?;
 
-    let bestmove = loop {
-        let line = read_line(&mut engine.runtime, &mut engine.logs)?;
-        if let Some(bestmove) = parse_bestmove(&line) {
-            break bestmove;
-        }
-    };
+    let mut bestmove = read_xiangqi_bestmove(&mut engine)?;
+    if !is_valid_xiangqi_bestmove(&bestmove)
+        && xiangqi_game_has_legal_engine_move(controller, turn)?
+    {
+        engine.logs.push(format!(
+            "gui: invalid bestmove {:?}; retrying with go depth 3",
+            bestmove
+        ));
+        send_engine_position(
+            &mut engine.runtime.stdin,
+            &engine.config.protocol,
+            &initial_fen,
+            &moves,
+            &mut engine.logs,
+        )?;
+        send_engine_go(
+            &mut engine.runtime.stdin,
+            &GoMode::Depth(3),
+            &mut engine.logs,
+        )?;
+        bestmove = read_xiangqi_bestmove(&mut engine)?;
+    }
 
     let mut start_next_engine = false;
     {
@@ -1385,7 +1844,7 @@ fn request_xiangqi_game_engine_move(
         if ctrl.shutdown || ctrl.status != GameStatus::Playing || ctrl.position.turn != turn {
             return Ok(());
         }
-        if bestmove.trim().is_empty() || bestmove == "0000" {
+        if !is_valid_xiangqi_bestmove(&bestmove) {
             return Err("engine returned no legal move".to_string());
         }
         ctrl.apply_move(&bestmove)?;
@@ -1405,7 +1864,11 @@ fn request_xiangqi_game_engine_move(
     Ok(())
 }
 
-fn xiangqi_game_loop(game_id: GameId, controller: Arc<Mutex<XiangqiGameController>>, window: Window) {
+fn xiangqi_game_loop(
+    game_id: GameId,
+    controller: Arc<Mutex<XiangqiGameController>>,
+    window: Window,
+) {
     maybe_start_xiangqi_engine(&window, &game_id, &controller);
     loop {
         thread::sleep(Duration::from_millis(100));
@@ -2225,7 +2688,11 @@ fn http_get_chessdb(path: &str) -> Result<String, String> {
         .ok_or("invalid chessdb response".to_string())?;
     let headers = String::from_utf8_lossy(&response[..header_end]);
     if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
-        return Err(headers.lines().next().unwrap_or("chessdb request failed").to_string());
+        return Err(headers
+            .lines()
+            .next()
+            .unwrap_or("chessdb request failed")
+            .to_string());
     }
     let mut body = response[header_end + 4..].to_vec();
     if headers

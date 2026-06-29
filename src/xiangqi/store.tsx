@@ -23,13 +23,11 @@ import {
   makeFen,
   makeUciMove,
   parseFen,
-  positionKey,
   type GameNode,
   type XiangqiDrawShape,
-  type XiangqiColor,
   type XiangqiMove,
-  type XiangqiPosition,
 } from "./xiangqi";
+import { adjudicateXiangqiRepetition } from "./rules";
 
 export type { XiangqiHeaders, XiangqiOrientation, XiangqiResult } from "./persistence";
 
@@ -426,103 +424,6 @@ function adjudicateXiangqiResult(
     return { result: "1/2-1/2", reason: "naturalDraw" };
   }
   return null;
-}
-
-function adjudicateXiangqiRepetition(
-  root: GameNode,
-  path: number[],
-): { result: XiangqiResult; reason: XiangqiResultReason } | null {
-  const line = nodesAtPath(root, path);
-  const current = line.at(-1);
-  if (!current) return null;
-
-  const currentKey = positionKey(current.fen);
-  const occurrences = line
-    .map((node, index) => ({ index, key: positionKey(node.fen) }))
-    .filter((entry) => entry.key === currentKey);
-  if (occurrences.length < 3) return null;
-
-  const previous = occurrences[occurrences.length - 2]?.index;
-  if (previous === undefined) return null;
-  const cycle = describeRepetitionCycle(line, previous);
-  const checkLoser = exclusiveSide(cycle, "checks");
-  if (checkLoser) {
-    return {
-      result: checkLoser === "red" ? "0-1" : "1-0",
-      reason: "perpetualCheck",
-    };
-  }
-
-  const chaseLoser = exclusiveSide(cycle, "chases");
-  if (chaseLoser) {
-    return {
-      result: chaseLoser === "red" ? "0-1" : "1-0",
-      reason: "perpetualChase",
-    };
-  }
-
-  return { result: "1/2-1/2", reason: "repetition" };
-}
-
-function nodesAtPath(root: GameNode, path: number[]): GameNode[] {
-  const nodes = [root];
-  let node = root;
-  for (const index of path) {
-    const child = node.children[index];
-    if (!child) break;
-    node = child;
-    nodes.push(child);
-  }
-  return nodes;
-}
-
-function describeRepetitionCycle(line: GameNode[], startIndex: number) {
-  const result: Record<XiangqiColor, { moves: number; checks: number; chases: number }> = {
-    red: { moves: 0, checks: 0, chases: 0 },
-    black: { moves: 0, checks: 0, chases: 0 },
-  };
-
-  for (let index = startIndex + 1; index < line.length; index += 1) {
-    const before = parseFen(line[index - 1].fen);
-    const after = parseFen(line[index].fen);
-    const mover = before.turn;
-    result[mover].moves += 1;
-    if (isInCheck(after, after.turn)) {
-      result[mover].checks += 1;
-    }
-    if (isChasingNonKingPiece(after, mover)) {
-      result[mover].chases += 1;
-    }
-  }
-
-  return result;
-}
-
-function exclusiveSide(
-  cycle: Record<XiangqiColor, { moves: number; checks: number; chases: number }>,
-  kind: "checks" | "chases",
-): XiangqiColor | null {
-  const red = cycle.red.moves > 0 && cycle.red[kind] === cycle.red.moves;
-  const black = cycle.black.moves > 0 && cycle.black[kind] === cycle.black.moves;
-  if (red === black) return null;
-  return red ? "red" : "black";
-}
-
-// NOTE: This is an approximate heuristic. It detects whether the given color can
-// capture any non-king enemy piece, but does not verify that the same piece is being
-// chased on every move, nor whether the threatened piece is protected (making the
-// capture a fair exchange). A full implementation of 长捉 requires tracking the
-// chased piece's identity and protection across the cycle, which is non-trivial.
-// Until then, perpetualChase verdicts should be treated as approximate.
-function isChasingNonKingPiece(position: XiangqiPosition, color: XiangqiColor): boolean {
-  const probe: XiangqiPosition = { ...position, turn: color };
-  for (const move of legalMoves(probe)) {
-    const target = position.board.get(move.to);
-    if (target && target.color !== color && target.role !== "king") {
-      return true;
-    }
-  }
-  return false;
 }
 
 function exportState(

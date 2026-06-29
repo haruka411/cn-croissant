@@ -34,6 +34,11 @@ import {
     DEFAULT_CUSTOM_BOARD_CALIBRATION,
     type CustomBoardCalibration,
 } from "@/xiangqi/customBoardTheme";
+import {
+    DEFAULT_XIANGQI_REPETITION_RULE,
+    XIANGQI_REPETITION_RULE_STORAGE_KEY,
+    type XiangqiRepetitionRule,
+} from "@/xiangqi/rules";
 import { getEnginesDir } from "../utils/directories";
 import type { Session } from "../utils/session";
 import { createAsyncZodStorage, createZodStorage } from "./utils";
@@ -182,6 +187,14 @@ export const snapArrowsAtom = atomWithStorage<boolean>("snap-dests", true);
 export const showArrowsAtom = atomWithStorage<boolean>("show-arrows", true);
 export const showConsecutiveArrowsAtom = atomWithStorage<boolean>("show-consecutive-arrows", true);
 export const showVariationArrowsAtom = atomWithStorage<boolean>("show-variation-arrows", false);
+export const xiangqiAnalysisAutoStartAtom = atomWithStorage<boolean>(
+    "xiangqi-analysis-auto-start",
+    true,
+);
+export const xiangqiRepetitionRuleAtom = atomWithStorage<XiangqiRepetitionRule>(
+    XIANGQI_REPETITION_RULE_STORAGE_KEY,
+    DEFAULT_XIANGQI_REPETITION_RULE,
+);
 export const eraseDrawablesOnClickAtom = atomWithStorage<boolean>(
     "erase-drawables-on-click",
     false,
@@ -245,7 +258,8 @@ export type XiangqiPieceStyle =
     | "stone"
     | "bamboo"
     | "crystal"
-    | "custom-svg";
+    | "custom-svg"
+    | "custom-png";
 export type XiangqiBoardTheme =
     | "classic"
     | "jade"
@@ -264,6 +278,15 @@ export const customPieceThemeConfirmedAtom = atomWithStorage<boolean>(
 );
 export const customPieceDirectoryAtom = atomWithStorage<string>("custom-piece-directory", "");
 export const customPieceScaleAtom = atomWithStorage<number>("custom-piece-scale", 100);
+export const customPngPieceThemeConfirmedAtom = atomWithStorage<boolean>(
+    "custom-png-piece-theme-confirmed-v1",
+    false,
+);
+export const customPngPieceDirectoryAtom = atomWithStorage<string>(
+    "custom-png-piece-directory",
+    "",
+);
+export const customPngPieceScaleAtom = atomWithStorage<number>("custom-png-piece-scale", 100);
 export const customBoardDirectoryAtom = atomWithStorage<string>("custom-board-directory", "");
 export const customBoardImageAtom = atomWithStorage<string>("custom-board-image", "");
 export const customBoardCalibrationAtom = atomWithStorage<CustomBoardCalibration>(

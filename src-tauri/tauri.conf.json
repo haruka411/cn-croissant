@@ -38,8 +38,7 @@
       "../engine/pikafish/": "engine/pikafish/",
       "../engine/database/": "engine/database/"
     },
-    "targets": "all",
-    "createUpdaterArtifacts": "v1Compatible"
+    "targets": "all"
   },
   "build": {
     "beforeDevCommand": "pnpm start-vite",

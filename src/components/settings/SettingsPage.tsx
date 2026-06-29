@@ -2,9 +2,11 @@ import {
   ActionIcon,
   Card,
   Group,
+  NumberInput,
   ScrollArea,
   Select,
   Stack,
+  Switch,
   Table,
   Tabs,
   Text,
@@ -49,7 +51,10 @@ import {
   storedDatabasesDirAtom,
   storedDocumentDirAtom,
   storedEnginesDirAtom,
+  xiangqiAnalysisAutoStartAtom,
+  xiangqiRepetitionRuleAtom,
 } from "@/state/atoms";
+import type { XiangqiRepetitionRule } from "@/xiangqi/rules";
 import { keyMapAtom } from "@/state/keybinds";
 import FileInput from "../common/FileInput";
 import AppFontSelect from "./AppFontSelect";
@@ -137,6 +142,7 @@ export default function Page() {
   const [showCoordinates, setShowCoordinates] = useAtom(showCoordinatesAtom);
   const [materialDisplay, setMaterialDisplay] = useAtom(materialDisplayAtom);
   const [practiceAutoDifficulty, setPracticeAutoDifficulty] = useAtom(practiceAutoDifficultyAtom);
+  const [xiangqiRepetitionRule, setXiangqiRepetitionRule] = useAtom(xiangqiRepetitionRuleAtom);
 
   const settings: SettingItem[] = useMemo(
     () => [
@@ -182,6 +188,37 @@ export default function Page() {
         description: t("Settings.Arrows.Desc"),
         keywords: ["arrows", "analysis"],
         render: () => <SettingsSwitch atom={showArrowsAtom} />,
+      },
+      {
+        id: "xiangqi-analysis-auto-start",
+        category: "board",
+        title: t("Settings.XiangqiAnalysisAutoStart"),
+        description: t("Settings.XiangqiAnalysisAutoStart.Desc"),
+        keywords: ["xiangqi", "analysis", "engine", "auto", "start"],
+        render: () => <SettingsSwitch atom={xiangqiAnalysisAutoStartAtom} />,
+      },
+      {
+        id: "xiangqi-repetition-rule",
+        category: "board",
+        title: t("Settings.XiangqiRepetitionRule"),
+        description: t("Settings.XiangqiRepetitionRule.Desc"),
+        keywords: ["xiangqi", "rule", "repetition", "chase", "check"],
+        render: () => (
+          <Select
+            data={[
+              { label: t("Settings.XiangqiRepetitionRule.AsianRule"), value: "AsianRule" },
+              { label: t("Settings.XiangqiRepetitionRule.ChineseRule"), value: "ChineseRule" },
+              { label: t("Settings.XiangqiRepetitionRule.SkyRule"), value: "SkyRule" },
+              { label: t("Settings.XiangqiRepetitionRule.ComputerRule"), value: "ComputerRule" },
+              { label: t("Settings.XiangqiRepetitionRule.YitianRule"), value: "YitianRule" },
+              { label: t("Settings.XiangqiRepetitionRule.AllowChase"), value: "AllowChase" },
+              { label: t("Settings.XiangqiRepetitionRule.NoJudgement"), value: "NoJudgement" },
+            ]}
+            allowDeselect={false}
+            value={xiangqiRepetitionRule}
+            onChange={(val) => setXiangqiRepetitionRule((val ?? "AsianRule") as XiangqiRepetitionRule)}
+          />
+        ),
       },
       {
         id: "variation-arrows",
@@ -481,6 +518,7 @@ export default function Page() {
       showCoordinates,
       isNative,
       materialDisplay,
+      xiangqiRepetitionRule,
       filesDirectory,
       databasesDirectory,
       enginesDirectory,
@@ -491,6 +529,7 @@ export default function Page() {
       setDatabasesDirectory,
       setEnginesDirectory,
       setMaterialDisplay,
+      setXiangqiRepetitionRule,
       practiceAutoDifficulty,
       setPracticeAutoDifficulty,
     ],
