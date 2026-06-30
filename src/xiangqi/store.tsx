@@ -146,8 +146,8 @@ export function createXiangqiStore(id?: string): XiangqiStore {
           adjudicateXiangqiRepetition(root, nextPath);
         const headers = {
           ...state.headers,
-          result: adjudication?.result ?? state.headers.result,
-          resultReason: adjudication?.reason ?? state.headers.resultReason ?? null,
+          result: adjudication?.result ?? "*",
+          resultReason: adjudication?.reason ?? null,
         };
 
         return {

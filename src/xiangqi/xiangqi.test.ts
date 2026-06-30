@@ -72,6 +72,22 @@ describe("xiangqi rules", () => {
         expect(result.position.halfmove).toBe(1);
     });
 
+    it("does not carry a recorded game result into continued analysis", () => {
+        const store = createXiangqiStore();
+        store.getState().setHeaders({
+            ...store.getState().headers,
+            result: "0-1",
+            resultReason: "resignation",
+        });
+        const move = parseUciMove("h0g2");
+        expect(move).not.toBeNull();
+
+        store.getState().makeMove(move!);
+
+        expect(store.getState().headers.result).toBe("*");
+        expect(store.getState().headers.resultReason).toBeNull();
+    });
+
     it("adjudicates a draw after 120 consecutive non-capturing halfmoves", () => {
         const store = createXiangqiStore();
         store.getState().setFen("4k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 119 1");

@@ -850,7 +850,10 @@ struct XiangqiSideCycleStats {
     checks: u32,
 }
 
-fn adjudicate_xiangqi_repetition(initial_fen: &str, moves: &[GameMove]) -> Option<XiangqiRuleVerdict> {
+fn adjudicate_xiangqi_repetition(
+    initial_fen: &str,
+    moves: &[GameMove],
+) -> Option<XiangqiRuleVerdict> {
     let mut fens = Vec::with_capacity(moves.len() + 1);
     fens.push(initial_fen.to_string());
     fens.extend(moves.iter().map(|mv| mv.fen_after.clone()));
@@ -907,9 +910,9 @@ fn apply_xiangqi_repetition_rule(cycle: [XiangqiViolation; 2]) -> Option<Xiangqi
         [XiangqiViolation::Check, XiangqiViolation::Idle] => {
             Some(XiangqiRuleVerdict::RedLoses(GameEndReason::PerpetualCheck))
         }
-        [XiangqiViolation::Idle, XiangqiViolation::Check] => {
-            Some(XiangqiRuleVerdict::BlackLoses(GameEndReason::PerpetualCheck))
-        }
+        [XiangqiViolation::Idle, XiangqiViolation::Check] => Some(XiangqiRuleVerdict::BlackLoses(
+            GameEndReason::PerpetualCheck,
+        )),
         _ => Some(XiangqiRuleVerdict::Draw(DrawReason::ThreefoldRepetition)),
     }
 }
@@ -1085,6 +1088,7 @@ impl XiangqiGameController {
             controller.apply_move_no_clock(&mv)?;
         }
         controller.reset_clock();
+        controller.check_game_end();
         Ok(controller)
     }
 
@@ -3324,8 +3328,7 @@ mod xiangqi_rule_and_book_tests {
     }
 
     fn obk_move(from_file: usize, from_rank: usize, to_file: usize, to_rank: usize) -> i32 {
-        (obk_square_from_uci(from_file, from_rank) << 8)
-            | obk_square_from_uci(to_file, to_rank)
+        (obk_square_from_uci(from_file, from_rank) << 8) | obk_square_from_uci(to_file, to_rank)
     }
 
     fn create_temporary_pfbook() -> PathBuf {
@@ -3389,7 +3392,10 @@ mod xiangqi_rule_and_book_tests {
     fn xiangqi_repetition_waits_for_three_occurrences() {
         let initial_fen = "r3k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 0 1";
         let twofold_moves = repeated_rook_moves(1);
-        assert_eq!(adjudicate_xiangqi_repetition(initial_fen, &twofold_moves), None);
+        assert_eq!(
+            adjudicate_xiangqi_repetition(initial_fen, &twofold_moves),
+            None
+        );
         assert_eq!(
             adjudicate_xiangqi_repetition(initial_fen, &repeated_rook_moves(2)),
             Some(XiangqiRuleVerdict::Draw(DrawReason::ThreefoldRepetition))
@@ -3400,6 +3406,36 @@ mod xiangqi_rule_and_book_tests {
     fn xiangqi_natural_draw_reaches_120_halfmoves() {
         assert!(!xiangqi_natural_draw_reached(119));
         assert!(xiangqi_natural_draw_reached(120));
+    }
+
+    #[test]
+    fn xiangqi_game_started_from_terminal_fen_is_finished_immediately() {
+        let controller = XiangqiGameController::new(
+            "terminal-start-test".to_string(),
+            XiangqiGameConfig {
+                white: XiangqiPlayerConfig::Human {
+                    name: "red".to_string(),
+                },
+                black: XiangqiPlayerConfig::Human {
+                    name: "black".to_string(),
+                },
+                white_time_control: None,
+                black_time_control: None,
+                initial_fen: Some("4k4/R8/9/9/9/9/9/9/3R1R3/K8 b - - 1 1".to_string()),
+                initial_moves: Vec::new(),
+                opening_book: None,
+            },
+        )
+        .expect("terminal FEN should initialize");
+
+        assert_eq!(
+            controller.status,
+            GameStatus::Finished {
+                result: GameResult::WhiteWins {
+                    reason: GameEndReason::NoLegalMove,
+                },
+            }
+        );
     }
 
     #[test]

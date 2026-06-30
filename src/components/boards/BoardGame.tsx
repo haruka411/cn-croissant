@@ -25,7 +25,14 @@ import { useAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { match } from "ts-pattern";
-import { commands, events, type GameConfig, type GameMove, type GameResult, type GameState } from "@/bindings";
+import {
+  commands,
+  events,
+  type GameConfig,
+  type GameMove,
+  type GameResult,
+  type GameState,
+} from "@/bindings";
 import {
   currentGameStateAtom,
   currentGameStartFromCurrentAtom,
@@ -119,12 +126,6 @@ function BoardGame() {
   const finishGameRef = useRef(finishGame);
   finishGameRef.current = finishGame;
 
-  useEffect(() => {
-    if (gameState === "playing" && headers.result !== "*") {
-      setGameState("gameOver");
-    }
-  }, [gameState, headers.result, setGameState]);
-
   function cycleColor() {
     setInputColor((prev) =>
       match(prev)
@@ -148,7 +149,11 @@ function BoardGame() {
   }
 
   const syncTreeWithMoves = useCallback(
-    (backendMoves: GameMove[], initialFen?: string, startPath: number[] = gameStartPath.current) => {
+    (
+      backendMoves: GameMove[],
+      initialFen?: string,
+      startPath: number[] = gameStartPath.current,
+    ) => {
       const baseFen = initialFen ?? root.fen;
       let baseNode;
       try {
@@ -254,7 +259,11 @@ function BoardGame() {
         black: state.blackTime !== null ? Number(state.blackTime) : null,
       });
       syncTreeWithMovesRef.current(state.moves, gameInitialFen.current, gameStartPath.current);
-      if (state.status !== "playing" && typeof state.status === "object" && "finished" in state.status) {
+      if (
+        state.status !== "playing" &&
+        typeof state.status === "object" &&
+        "finished" in state.status
+      ) {
         const outcome = gameResultToOutcome(state.status.finished.result);
         finishGameRef.current(outcome.result, outcome.reason);
       }
@@ -378,7 +387,21 @@ function BoardGame() {
       } else {
         goToMove(startPath);
       }
-      setGameState("playing");
+      if (
+        state.status !== "playing" &&
+        typeof state.status === "object" &&
+        "finished" in state.status
+      ) {
+        const outcome = gameResultToOutcome(state.status.finished.result);
+        setHeaders({
+          ...nextHeaders,
+          result: outcome.result,
+          resultReason: outcome.reason,
+        });
+        setGameState("gameOver");
+      } else {
+        setGameState("playing");
+      }
       setGameStartFromCurrent(false);
       setError(null);
     } catch (err) {

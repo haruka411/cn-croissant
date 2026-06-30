@@ -570,8 +570,7 @@ mod tests {
     }
 
     fn obk_move(from_file: usize, from_rank: usize, to_file: usize, to_rank: usize) -> i32 {
-        (obk_square_from_uci(from_file, from_rank) << 8)
-            | obk_square_from_uci(to_file, to_rank)
+        (obk_square_from_uci(from_file, from_rank) << 8) | obk_square_from_uci(to_file, to_rank)
     }
 
     #[test]
@@ -666,6 +665,9 @@ mod tests {
             .expect("initial position should query temporary pfBook");
 
         let _ = std::fs::remove_file(&path);
-        assert_eq!(moves.first().map(|book_move| book_move.uci.as_str()), Some("c3c4"));
+        assert_eq!(
+            moves.first().map(|book_move| book_move.uci.as_str()),
+            Some("c3c4")
+        );
     }
 }
