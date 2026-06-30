@@ -1,4 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use rusqlite::{params, Connection};
 use serde::Deserialize;
@@ -14,6 +19,8 @@ pub(crate) struct XiangqiOpeningBookConfig {
     pub path: String,
     #[serde(default = "default_opening_book_max_ply")]
     pub max_ply: usize,
+    #[serde(default)]
+    pub move_rule: XiangqiOpeningBookMoveRule,
 }
 
 fn default_opening_book_max_ply() -> usize {
@@ -25,6 +32,7 @@ pub(crate) struct XiangqiOpeningBook {
     path: PathBuf,
     kind: XiangqiOpeningBookKind,
     max_ply: usize,
+    move_rule: XiangqiOpeningBookMoveRule,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +40,21 @@ enum XiangqiOpeningBookKind {
     BhObk,
     Xqb,
     PfBook,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum XiangqiOpeningBookMoveRule {
+    BestScore,
+    BestWinRate,
+    PositiveRandom,
+    FullRandom,
+}
+
+impl Default for XiangqiOpeningBookMoveRule {
+    fn default() -> Self {
+        Self::BestScore
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -64,11 +87,28 @@ impl XiangqiOpeningBook {
             path,
             kind,
             max_ply: config.max_ply.max(1),
+            move_rule: config.move_rule,
         })
     }
 
     pub(crate) fn max_ply(&self) -> usize {
         self.max_ply
+    }
+
+    pub(crate) fn select_legal_move<F>(
+        &self,
+        position: &XiangqiPosition,
+        mut is_legal: F,
+    ) -> Result<Option<String>, String>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        let legal_moves: Vec<_> = self
+            .query(position)?
+            .into_iter()
+            .filter(|book_move| is_legal(&book_move.uci))
+            .collect();
+        Ok(select_book_move(&legal_moves, self.move_rule).map(|book_move| book_move.uci.clone()))
     }
 
     pub(crate) fn query(&self, position: &XiangqiPosition) -> Result<Vec<XiangqiBookMove>, String> {
@@ -90,6 +130,60 @@ impl XiangqiOpeningBook {
         });
         Ok(moves)
     }
+}
+
+fn select_book_move(
+    moves: &[XiangqiBookMove],
+    move_rule: XiangqiOpeningBookMoveRule,
+) -> Option<&XiangqiBookMove> {
+    if moves.is_empty() {
+        return None;
+    }
+    match move_rule {
+        XiangqiOpeningBookMoveRule::BestScore => best_by_score(moves),
+        XiangqiOpeningBookMoveRule::BestWinRate => moves
+            .iter()
+            .max_by_key(|book_move| (book_move.win_rate_score(), book_move.score)),
+        XiangqiOpeningBookMoveRule::PositiveRandom => {
+            let positive_moves: Vec<_> = moves
+                .iter()
+                .filter(|book_move| book_move.score > 0)
+                .collect();
+            if positive_moves.is_empty() {
+                best_by_score(moves)
+            } else {
+                positive_moves
+                    .get(random_opening_book_index(positive_moves.len(), moves))
+                    .copied()
+            }
+        }
+        XiangqiOpeningBookMoveRule::FullRandom => {
+            moves.get(random_opening_book_index(moves.len(), moves))
+        }
+    }
+}
+
+fn best_by_score(moves: &[XiangqiBookMove]) -> Option<&XiangqiBookMove> {
+    moves
+        .iter()
+        .max_by_key(|book_move| (book_move.score, book_move.win_rate_score()))
+}
+
+fn random_opening_book_index(len: usize, moves: &[XiangqiBookMove]) -> usize {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let mut hasher = DefaultHasher::new();
+    nanos.hash(&mut hasher);
+    for book_move in moves {
+        book_move.uci.hash(&mut hasher);
+        book_move.score.hash(&mut hasher);
+        book_move.win.hash(&mut hasher);
+        book_move.draw.hash(&mut hasher);
+        book_move.lost.hash(&mut hasher);
+    }
+    (hasher.finish() as usize) % len
 }
 
 fn opening_book_kind(path: &Path) -> Result<XiangqiOpeningBookKind, String> {
@@ -573,6 +667,51 @@ mod tests {
         (obk_square_from_uci(from_file, from_rank) << 8) | obk_square_from_uci(to_file, to_rank)
     }
 
+    fn test_book_move(uci: &str, score: i32, win: i32, draw: i32, lost: i32) -> XiangqiBookMove {
+        XiangqiBookMove {
+            uci: uci.to_string(),
+            score,
+            win,
+            draw,
+            lost,
+        }
+    }
+
+    #[test]
+    fn opening_book_move_rules_select_expected_candidates() {
+        let moves = vec![
+            test_book_move("a0a1", 5, 1, 0, 9),
+            test_book_move("b0b1", 12, 1, 0, 9),
+            test_book_move("c0c1", 3, 9, 0, 1),
+        ];
+
+        assert_eq!(
+            select_book_move(&moves, XiangqiOpeningBookMoveRule::BestScore)
+                .map(|book_move| book_move.uci.as_str()),
+            Some("b0b1")
+        );
+        assert_eq!(
+            select_book_move(&moves, XiangqiOpeningBookMoveRule::BestWinRate)
+                .map(|book_move| book_move.uci.as_str()),
+            Some("c0c1")
+        );
+        assert!(matches!(
+            select_book_move(&moves, XiangqiOpeningBookMoveRule::PositiveRandom)
+                .map(|book_move| book_move.uci.as_str()),
+            Some("a0a1" | "b0b1" | "c0c1")
+        ));
+
+        let negative_moves = vec![
+            test_book_move("a0a1", -5, 1, 0, 9),
+            test_book_move("b0b1", -2, 1, 0, 9),
+        ];
+        assert_eq!(
+            select_book_move(&negative_moves, XiangqiOpeningBookMoveRule::PositiveRandom)
+                .map(|book_move| book_move.uci.as_str()),
+            Some("b0b1")
+        );
+    }
+
     #[test]
     fn reads_bundled_obk_table() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -607,6 +746,7 @@ mod tests {
         let book = XiangqiOpeningBook::new(XiangqiOpeningBookConfig {
             path: path.to_string_lossy().to_string(),
             max_ply: 40,
+            move_rule: XiangqiOpeningBookMoveRule::BestScore,
         })
         .expect("bundled OBK should load");
         let position =
@@ -658,6 +798,7 @@ mod tests {
         let book = XiangqiOpeningBook::new(XiangqiOpeningBookConfig {
             path: path.to_string_lossy().to_string(),
             max_ply: 40,
+            move_rule: XiangqiOpeningBookMoveRule::BestScore,
         })
         .expect("temporary pfBook should load");
         let moves = book

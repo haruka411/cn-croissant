@@ -8,6 +8,7 @@ import {
   Paper,
   Portal,
   ScrollArea,
+  Select,
   SegmentedControl,
   Stack,
   Text,
@@ -42,10 +43,12 @@ import {
   gameInputColorAtom,
   gameOpeningBookEnabledAtom,
   gameOpeningBookMaxPlyAtom,
+  gameOpeningBookMoveRuleAtom,
   gameOpeningBookPathAtom,
   gamePlayer1SettingsAtom,
   gamePlayer2SettingsAtom,
   gameSameTimeControlAtom,
+  type GameOpeningBookMoveRule,
 } from "@/state/atoms";
 import { useXiangqiStore } from "@/xiangqi/store";
 import {
@@ -80,6 +83,7 @@ function BoardGame() {
   const [openingBookPath, setOpeningBookPath] = useAtom(gameOpeningBookPathAtom);
   const [openingBookEnabled, setOpeningBookEnabled] = useAtom(gameOpeningBookEnabledAtom);
   const [openingBookMaxPly, setOpeningBookMaxPly] = useAtom(gameOpeningBookMaxPlyAtom);
+  const [openingBookMoveRule, setOpeningBookMoveRule] = useAtom(gameOpeningBookMoveRuleAtom);
   const gameInitialFen = useRef(INITIAL_XIANGQI_FEN);
   const gameStartPath = useRef<number[]>([]);
   const boardRef = useRef(null);
@@ -360,6 +364,7 @@ function BoardGame() {
             ? {
                 path: openingBookPath,
                 maxPly: openingBookMaxPly,
+                moveRule: openingBookMoveRule,
               }
             : null,
       } as GameConfig;
@@ -559,6 +564,34 @@ function BoardGame() {
                       <Text size="xs" c="dimmed">
                         {t("Board.Opponent.OpeningBookDesc")}
                       </Text>
+                      <Select
+                        label={t("Board.Opponent.OpeningBookMoveRule")}
+                        value={openingBookMoveRule}
+                        onChange={(value) => {
+                          if (value) {
+                            setOpeningBookMoveRule(value as GameOpeningBookMoveRule);
+                          }
+                        }}
+                        data={[
+                          {
+                            value: "bestScore",
+                            label: t("Board.Opponent.OpeningBookMoveRule.BestScore"),
+                          },
+                          {
+                            value: "bestWinRate",
+                            label: t("Board.Opponent.OpeningBookMoveRule.BestWinRate"),
+                          },
+                          {
+                            value: "positiveRandom",
+                            label: t("Board.Opponent.OpeningBookMoveRule.PositiveRandom"),
+                          },
+                          {
+                            value: "fullRandom",
+                            label: t("Board.Opponent.OpeningBookMoveRule.FullRandom"),
+                          },
+                        ]}
+                        allowDeselect={false}
+                      />
                     </Stack>
                   </Paper>
                   {error && (
@@ -743,6 +776,7 @@ function gameEndReasonToXiangqiReason(reason: GameResult["reason"]): XiangqiResu
 function drawReasonToXiangqiReason(reason: Extract<GameResult, { type: "draw" }>["reason"]) {
   if (reason === "threefoldRepetition") return "repetition";
   if (reason === "fiftyMoveRule") return "naturalDraw";
+  if (reason === "insufficientMaterial") return "insufficientMaterial";
   return "noLegalMove";
 }
 

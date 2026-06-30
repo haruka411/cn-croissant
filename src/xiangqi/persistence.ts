@@ -5,6 +5,7 @@ export type XiangqiResult = "*" | "1-0" | "0-1" | "1/2-1/2";
 export type XiangqiResultReason =
     | "checkmate"
     | "noLegalMove"
+    | "insufficientMaterial"
     | "naturalDraw"
     | "perpetualCheck"
     | "perpetualChase"
@@ -135,6 +136,7 @@ export function normalizeResultReason(reason: string | undefined): XiangqiResult
     if (
         reason === "checkmate" ||
         reason === "noLegalMove" ||
+        reason === "insufficientMaterial" ||
         reason === "naturalDraw" ||
         reason === "perpetualCheck" ||
         reason === "perpetualChase" ||
@@ -151,6 +153,7 @@ export function resultReasonTranslationKey(reason: XiangqiResultReason): string 
     const keys: Record<XiangqiResultReason, string> = {
         checkmate: "Board.ResultReason.Checkmate",
         noLegalMove: "Board.ResultReason.NoLegalMove",
+        insufficientMaterial: "Board.ResultReason.InsufficientMaterial",
         naturalDraw: "Board.ResultReason.NaturalDraw",
         perpetualCheck: "Board.ResultReason.PerpetualCheck",
         perpetualChase: "Board.ResultReason.PerpetualChase",

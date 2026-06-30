@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -834,6 +834,7 @@ fn apply_xiangqi_move(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum XiangqiViolation {
     Idle,
+    Chase,
     Check,
 }
 
@@ -848,6 +849,12 @@ enum XiangqiRuleVerdict {
 struct XiangqiSideCycleStats {
     moves: u32,
     checks: u32,
+}
+
+#[derive(Clone)]
+struct XiangqiCycleState {
+    position: XiangqiPosition,
+    ids: [[Option<u8>; 9]; 10],
 }
 
 fn adjudicate_xiangqi_repetition(
@@ -869,33 +876,48 @@ fn adjudicate_xiangqi_repetition(
     if occurrences.len() < 3 {
         return None;
     }
-    let start_index = *occurrences.get(occurrences.len().saturating_sub(2))?;
-    let cycle = classify_xiangqi_repetition_cycle(&fens, start_index)?;
+    let start_index = *occurrences.get(occurrences.len().saturating_sub(3))?;
+    let cycle = classify_xiangqi_repetition_cycle(&fens, moves, start_index)?;
     apply_xiangqi_repetition_rule(cycle)
 }
 
 fn classify_xiangqi_repetition_cycle(
     fens: &[String],
+    moves: &[GameMove],
     start_index: usize,
 ) -> Option<[XiangqiViolation; 2]> {
     let mut stats = [
         XiangqiSideCycleStats::default(),
         XiangqiSideCycleStats::default(),
     ];
+    let mut any_check = false;
     for index in (start_index + 1)..fens.len() {
         let before = XiangqiPosition::parse(fens.get(index - 1)?).ok()?;
         let after = XiangqiPosition::parse(fens.get(index)?).ok()?;
         let side_index = color_index(before.turn);
         stats[side_index].moves += 1;
         if is_xiangqi_in_check(&after, after.turn) {
+            any_check = true;
             stats[side_index].checks += 1;
         }
     }
 
-    Some([
+    let mut verdicts = [
         classify_xiangqi_side_violation(&stats[0]),
         classify_xiangqi_side_violation(&stats[1]),
-    ])
+    ];
+
+    if !any_check {
+        let states = build_xiangqi_cycle_states(fens, moves, start_index)?;
+        if !xiangqi_long_chase_targets(&states, XiangqiColor::Red).is_empty() {
+            verdicts[0] = XiangqiViolation::Chase;
+        }
+        if !xiangqi_long_chase_targets(&states, XiangqiColor::Black).is_empty() {
+            verdicts[1] = XiangqiViolation::Chase;
+        }
+    }
+
+    Some(verdicts)
 }
 
 fn classify_xiangqi_side_violation(side: &XiangqiSideCycleStats) -> XiangqiViolation {
@@ -906,19 +928,277 @@ fn classify_xiangqi_side_violation(side: &XiangqiSideCycleStats) -> XiangqiViola
 }
 
 fn apply_xiangqi_repetition_rule(cycle: [XiangqiViolation; 2]) -> Option<XiangqiRuleVerdict> {
-    match cycle {
-        [XiangqiViolation::Check, XiangqiViolation::Idle] => {
-            Some(XiangqiRuleVerdict::RedLoses(GameEndReason::PerpetualCheck))
-        }
-        [XiangqiViolation::Idle, XiangqiViolation::Check] => Some(XiangqiRuleVerdict::BlackLoses(
-            GameEndReason::PerpetualCheck,
-        )),
-        _ => Some(XiangqiRuleVerdict::Draw(DrawReason::ThreefoldRepetition)),
+    let red_rank = xiangqi_violation_rank(cycle[0]);
+    let black_rank = xiangqi_violation_rank(cycle[1]);
+    if red_rank > black_rank {
+        Some(XiangqiRuleVerdict::RedLoses(xiangqi_violation_loss_reason(
+            cycle[0],
+        )?))
+    } else if black_rank > red_rank {
+        Some(XiangqiRuleVerdict::BlackLoses(
+            xiangqi_violation_loss_reason(cycle[1])?,
+        ))
+    } else {
+        Some(XiangqiRuleVerdict::Draw(DrawReason::ThreefoldRepetition))
     }
 }
 
-fn xiangqi_natural_draw_reached(current_halfmove: u32) -> bool {
-    current_halfmove >= 120
+fn xiangqi_violation_rank(violation: XiangqiViolation) -> u8 {
+    match violation {
+        XiangqiViolation::Idle => 0,
+        XiangqiViolation::Chase => 1,
+        XiangqiViolation::Check => 2,
+    }
+}
+
+fn xiangqi_violation_loss_reason(violation: XiangqiViolation) -> Option<GameEndReason> {
+    match violation {
+        XiangqiViolation::Check => Some(GameEndReason::PerpetualCheck),
+        XiangqiViolation::Chase => Some(GameEndReason::PerpetualChase),
+        XiangqiViolation::Idle => None,
+    }
+}
+
+fn xiangqi_natural_draw_reached(
+    initial_fen: &str,
+    moves: &[GameMove],
+    current_halfmove: u32,
+) -> bool {
+    xiangqi_effective_noncapture_count(initial_fen, moves).unwrap_or(current_halfmove) >= 120
+}
+
+fn xiangqi_effective_noncapture_count(initial_fen: &str, moves: &[GameMove]) -> Option<u32> {
+    let mut fens = Vec::with_capacity(moves.len() + 1);
+    fens.push(initial_fen.to_string());
+    fens.extend(moves.iter().map(|mv| mv.fen_after.clone()));
+
+    let initial = XiangqiPosition::parse(fens.first()?).ok()?;
+    let mut effective = initial.halfmove;
+    let mut checks = [0u32; 2];
+    let mut ignored_check_reply: Option<XiangqiColor> = None;
+
+    for index in 1..fens.len() {
+        let before = XiangqiPosition::parse(fens.get(index - 1)?).ok()?;
+        let after = XiangqiPosition::parse(fens.get(index)?).ok()?;
+        if after.halfmove == 0 {
+            effective = 0;
+            checks = [0, 0];
+            ignored_check_reply = None;
+            continue;
+        }
+
+        let mover = before.turn;
+        let reply_to_ignored_check = ignored_check_reply == Some(mover);
+        if reply_to_ignored_check {
+            ignored_check_reply = None;
+        }
+
+        let gives_check = is_xiangqi_in_check(&after, after.turn);
+        let mut ignored_check = false;
+        if gives_check {
+            let side_index = color_index(mover);
+            checks[side_index] += 1;
+            if checks[side_index] > 10 {
+                ignored_check = true;
+                ignored_check_reply = Some(after.turn);
+            }
+        }
+
+        if !ignored_check && !reply_to_ignored_check {
+            effective += 1;
+        }
+    }
+
+    Some(effective)
+}
+
+fn xiangqi_insufficient_material(position: &XiangqiPosition) -> bool {
+    for rank in 0..10 {
+        for file in 0..9 {
+            let Some(piece) = position.board[rank][file] else {
+                continue;
+            };
+            if matches!(
+                piece.role,
+                XiangqiRole::Rook | XiangqiRole::Horse | XiangqiRole::Cannon | XiangqiRole::Pawn
+            ) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn build_xiangqi_cycle_states(
+    fens: &[String],
+    moves: &[GameMove],
+    start_index: usize,
+) -> Option<Vec<XiangqiCycleState>> {
+    let mut position = XiangqiPosition::parse(fens.get(start_index)?).ok()?;
+    let mut ids = xiangqi_initial_piece_ids(&position);
+    let mut states = vec![XiangqiCycleState {
+        position: position.clone(),
+        ids,
+    }];
+
+    for index in (start_index + 1)..fens.len() {
+        let mv = parse_xiangqi_uci_move(&moves.get(index - 1)?.uci).ok()?;
+        let moved_id = ids[mv.from.1][mv.from.0]?;
+        ids[mv.from.1][mv.from.0] = None;
+        ids[mv.to.1][mv.to.0] = Some(moved_id);
+        position = XiangqiPosition::parse(fens.get(index)?).ok()?;
+        states.push(XiangqiCycleState {
+            position: position.clone(),
+            ids,
+        });
+    }
+
+    Some(states)
+}
+
+fn xiangqi_initial_piece_ids(position: &XiangqiPosition) -> [[Option<u8>; 9]; 10] {
+    let mut ids = [[None; 9]; 10];
+    let mut red_id = 0u8;
+    let mut black_id = 0u8;
+    for rank in 0..10 {
+        for file in 0..9 {
+            let Some(piece) = position.board[rank][file] else {
+                continue;
+            };
+            let id = if piece.color == XiangqiColor::Red {
+                let id = red_id;
+                red_id += 1;
+                id
+            } else {
+                let id = black_id;
+                black_id += 1;
+                id
+            };
+            ids[rank][file] = Some(id);
+        }
+    }
+    ids
+}
+
+fn xiangqi_long_chase_targets(states: &[XiangqiCycleState], side: XiangqiColor) -> HashSet<u8> {
+    let mut candidates: Option<HashSet<u8>> = None;
+    for index in 1..states.len() {
+        let before = &states[index - 1];
+        let after = &states[index];
+        let targets = if before.position.turn == side {
+            xiangqi_chased_piece_ids(after, side)
+        } else {
+            let before_chased = xiangqi_chased_piece_ids(before, side);
+            let after_chased = xiangqi_chased_piece_ids(after, side);
+            before_chased
+                .difference(&after_chased)
+                .copied()
+                .collect::<HashSet<_>>()
+        };
+
+        candidates = Some(match candidates {
+            Some(previous) => previous.intersection(&targets).copied().collect(),
+            None => targets,
+        });
+    }
+
+    candidates.unwrap_or_default()
+}
+
+fn xiangqi_chased_piece_ids(state: &XiangqiCycleState, side: XiangqiColor) -> HashSet<u8> {
+    let mut result = HashSet::new();
+    let mut position = state.position.clone();
+    position.turn = side;
+    for mv in legal_xiangqi_moves(&position) {
+        let Some(attacker) = position.board[mv.from.1][mv.from.0] else {
+            continue;
+        };
+        let Some(target) = position.board[mv.to.1][mv.to.0] else {
+            continue;
+        };
+        if attacker.color != side || target.color == side {
+            continue;
+        }
+        if matches!(attacker.role, XiangqiRole::King | XiangqiRole::Pawn)
+            || target.role == XiangqiRole::King
+            || xiangqi_is_unpromoted_pawn(target, mv.to.1)
+        {
+            continue;
+        }
+
+        let protected_exception = xiangqi_chase_protection_exception(attacker.role, target.role);
+        if !protected_exception && xiangqi_capture_can_be_recaptured(&position, mv) {
+            continue;
+        }
+        if attacker.role == target.role
+            && xiangqi_is_legal_capture_from_to(&position, target.color, mv.to, mv.from)
+        {
+            continue;
+        }
+
+        if let Some(id) = state.ids[mv.to.1][mv.to.0] {
+            result.insert(id);
+        }
+    }
+    result
+}
+
+fn xiangqi_chase_protection_exception(attacker: XiangqiRole, target: XiangqiRole) -> bool {
+    matches!(attacker, XiangqiRole::Horse | XiangqiRole::Cannon) && target == XiangqiRole::Rook
+        || matches!(attacker, XiangqiRole::Advisor | XiangqiRole::Elephant)
+            && matches!(
+                target,
+                XiangqiRole::Horse | XiangqiRole::Cannon | XiangqiRole::Rook
+            )
+}
+
+fn xiangqi_is_unpromoted_pawn(piece: XiangqiPiece, rank: usize) -> bool {
+    piece.role == XiangqiRole::Pawn
+        && match piece.color {
+            XiangqiColor::Red => rank <= 4,
+            XiangqiColor::Black => rank >= 5,
+        }
+}
+
+fn xiangqi_capture_can_be_recaptured(position: &XiangqiPosition, mv: XiangqiMove) -> bool {
+    let Ok(after) = apply_xiangqi_move(position, mv) else {
+        return false;
+    };
+    let Some(attacker) = position.board[mv.from.1][mv.from.0] else {
+        return false;
+    };
+    xiangqi_is_square_legally_attacked(&after.position, attacker.color.opposite(), mv.to)
+}
+
+fn xiangqi_is_square_legally_attacked(
+    position: &XiangqiPosition,
+    by: XiangqiColor,
+    square: (usize, usize),
+) -> bool {
+    let mut position = position.clone();
+    position.turn = by;
+    legal_xiangqi_moves(&position)
+        .into_iter()
+        .any(|mv| mv.to == square)
+}
+
+fn xiangqi_is_legal_capture_from_to(
+    position: &XiangqiPosition,
+    side: XiangqiColor,
+    from: (usize, usize),
+    to: (usize, usize),
+) -> bool {
+    let Some(target) = position.board[to.1][to.0] else {
+        return false;
+    };
+    if target.color == side {
+        return false;
+    }
+    let mut position = position.clone();
+    position.turn = side;
+    legal_xiangqi_moves(&position)
+        .into_iter()
+        .any(|mv| mv.from == from && mv.to == to)
 }
 
 fn color_index(color: XiangqiColor) -> usize {
@@ -1265,15 +1545,6 @@ impl XiangqiGameController {
             return;
         }
 
-        if xiangqi_natural_draw_reached(self.position.halfmove) {
-            self.status = GameStatus::Finished {
-                result: GameResult::Draw {
-                    reason: DrawReason::FiftyMoveRule,
-                },
-            };
-            return;
-        }
-
         if self
             .position_history
             .get(&self.position.position_key())
@@ -1292,6 +1563,26 @@ impl XiangqiGameController {
                     result: GameResult::WhiteWins { reason },
                 },
                 None => GameStatus::Playing,
+            };
+            if self.status != GameStatus::Playing {
+                return;
+            }
+        }
+
+        if xiangqi_insufficient_material(&self.position) {
+            self.status = GameStatus::Finished {
+                result: GameResult::Draw {
+                    reason: DrawReason::InsufficientMaterial,
+                },
+            };
+            return;
+        }
+
+        if xiangqi_natural_draw_reached(&self.initial_fen, &self.moves, self.position.halfmove) {
+            self.status = GameStatus::Finished {
+                result: GameResult::Draw {
+                    reason: DrawReason::FiftyMoveRule,
+                },
             };
         }
     }
@@ -1499,24 +1790,20 @@ fn find_xiangqi_opening_book_move(
         return Ok(None);
     }
 
-    let book_moves = match book.query(&position) {
-        Ok(book_moves) => book_moves,
+    let book_move = match book.select_legal_move(&position, |uci| {
+        parse_xiangqi_uci_move(uci)
+            .ok()
+            .and_then(|parsed| apply_xiangqi_move(&position, parsed).ok())
+            .is_some()
+    }) {
+        Ok(book_move) => book_move,
         Err(err) => {
             eprintln!("failed to query Xiangqi opening book: {err}");
             return Ok(None);
         }
     };
 
-    for book_move in book_moves {
-        let Ok(parsed) = parse_xiangqi_uci_move(&book_move.uci) else {
-            continue;
-        };
-        if apply_xiangqi_move(&position, parsed).is_ok() {
-            return Ok(Some((turn, book_move.uci)));
-        }
-    }
-
-    Ok(None)
+    Ok(book_move.map(|uci| (turn, uci)))
 }
 
 fn request_xiangqi_game_engine_move(
@@ -3376,6 +3663,17 @@ mod xiangqi_rule_and_book_tests {
         }
     }
 
+    fn synthetic_game_move(fen_after: String) -> GameMove {
+        GameMove {
+            uci: "a0a0".to_string(),
+            san: "a0a0".to_string(),
+            fen_after,
+            clock: None,
+            white_time: None,
+            black_time: None,
+        }
+    }
+
     fn repeated_rook_moves(repetitions: usize) -> Vec<GameMove> {
         let mut position = XiangqiPosition::parse("r3k4/4a4/9/9/9/9/9/9/9/R3K4 w - - 0 1")
             .expect("test FEN should parse");
@@ -3386,6 +3684,14 @@ mod xiangqi_rule_and_book_tests {
             }
         }
         moves
+    }
+
+    fn moves_from(initial_fen: &str, uci_moves: &[&str]) -> Vec<GameMove> {
+        let mut position = XiangqiPosition::parse(initial_fen).expect("test FEN should parse");
+        uci_moves
+            .iter()
+            .map(|uci| game_move(&mut position, uci))
+            .collect()
     }
 
     #[test]
@@ -3404,8 +3710,80 @@ mod xiangqi_rule_and_book_tests {
 
     #[test]
     fn xiangqi_natural_draw_reaches_120_halfmoves() {
-        assert!(!xiangqi_natural_draw_reached(119));
-        assert!(xiangqi_natural_draw_reached(120));
+        assert!(!xiangqi_natural_draw_reached(
+            "4k4/9/9/9/9/9/9/9/9/4K4 w - - 119 1",
+            &[],
+            119
+        ));
+        assert!(xiangqi_natural_draw_reached(
+            "4k4/9/9/9/9/9/9/9/9/4K4 w - - 120 1",
+            &[],
+            120
+        ));
+    }
+
+    #[test]
+    fn xiangqi_natural_draw_excludes_checks_after_ten_and_their_replies() {
+        let initial_fen = "3k5/9/9/9/9/9/9/9/4R4/4K4 w - - 99 1";
+        let mut moves = Vec::new();
+        for ply in 1..=22 {
+            let fen = if ply % 2 == 1 {
+                format!("4k4/9/9/9/9/9/9/9/4R4/4K4 b - - {} 1", 99 + ply)
+            } else {
+                format!("3k5/9/9/9/9/9/9/9/4R4/4K4 w - - {} 1", 99 + ply)
+            };
+            moves.push(synthetic_game_move(fen));
+        }
+
+        assert!(!xiangqi_natural_draw_reached(initial_fen, &moves, 121));
+    }
+
+    #[test]
+    fn xiangqi_insufficient_material_draws_when_only_kings_advisors_and_elephants_remain() {
+        let controller = XiangqiGameController::new(
+            "bare-material-test".to_string(),
+            XiangqiGameConfig {
+                white: XiangqiPlayerConfig::Human {
+                    name: "red".to_string(),
+                },
+                black: XiangqiPlayerConfig::Human {
+                    name: "black".to_string(),
+                },
+                white_time_control: None,
+                black_time_control: None,
+                initial_fen: Some("3akab2/4a4/9/9/9/9/9/9/4A4/3AKAB2 w - - 0 1".to_string()),
+                initial_moves: Vec::new(),
+                opening_book: None,
+            },
+        )
+        .expect("bare material FEN should initialize");
+
+        assert_eq!(
+            controller.status,
+            GameStatus::Finished {
+                result: GameResult::Draw {
+                    reason: DrawReason::InsufficientMaterial,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn xiangqi_repetition_adjudicates_single_sided_perpetual_chase_loss() {
+        let initial_fen = "4k3c/9/4bn2n/8c/6R2/6P2/9/9/9/3K5 w - - 0 1";
+        let moves = moves_from(
+            initial_fen,
+            &[
+                "g5i5", "i6f6", "i5g5", "f6i6", "g5i5", "i6f6", "i5g5", "f6i6",
+            ],
+        );
+
+        assert_eq!(
+            adjudicate_xiangqi_repetition(initial_fen, &moves),
+            Some(XiangqiRuleVerdict::BlackLoses(
+                GameEndReason::PerpetualChase
+            ))
+        );
     }
 
     #[test]
@@ -3462,6 +3840,7 @@ mod xiangqi_rule_and_book_tests {
                 opening_book: Some(XiangqiOpeningBookConfig {
                     path: path.to_string_lossy().to_string(),
                     max_ply: 40,
+                    move_rule: xiangqi_opening_book::XiangqiOpeningBookMoveRule::BestScore,
                 }),
             },
         )
