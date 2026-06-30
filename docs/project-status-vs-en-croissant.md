@@ -1,8 +1,8 @@
 # cn-croissant 项目状态与代码审查
 
-更新日期：2026-06-19
+更新日期：2026-06-30
 
-本文基于一次完整代码审查（规则核心、记谱、引擎分析、棋谱库、棋盘 UI、对弈、训练六大模块）编写，目标是给出**经代码验证**的真实完成度，而不是"代码是否存在"。审查同时跑通了测试套件（8 个测试文件 / 59 个用例全部通过）。
+本文基于代码审查（规则核心、记谱、引擎分析、棋谱库、棋盘 UI、对弈、训练六大模块）和当前构建验证编写，目标是给出**经代码验证**的真实完成度，而不是"代码是否存在"。当前验证包括前端测试（9 个测试文件 / 68 个用例通过）、Rust 后端测试（6 个用例通过）和 `pnpm build` release 构建通过。
 
 ## 项目定位
 
@@ -13,7 +13,7 @@ cn-croissant 在 [En Croissant](https://github.com/franciscoBSalgueiro/en-croiss
 项目已经远不止"换皮"：象棋规则核心、棋盘渲染、记谱、引擎实时分析、人机对弈、结果裁决都是**为象棋重写的真实实现**，且有测试覆盖。但仍处于"核心可用、外围未完"的阶段：
 
 - **核心闭环（分析、对弈、记谱、棋盘）可用且质量较高。**
-- **数据相关能力（CBL/OBK 专用格式、残局题库）大多是占位或假数据，离可用有明显差距。**
+- **数据相关能力分化明显：对弈开局库查询已可用；本地棋谱库中的 CBL/XQF/研究统计仍不完整。**
 - **代码层面残留大量上游国际象棋代码，其中后端 Rust 遗留模块根本不参与编译，属纯死代码。**
 
 ## 经验证的完成度总览
@@ -22,22 +22,22 @@ cn-croissant 在 [En Croissant](https://github.com/franciscoBSalgueiro/en-croiss
 | --- | --- | --- |
 | 象棋规则核心 `xiangqi.ts` | ~90% | 走法/将军/送将过滤正确，有测试 |
 | 记谱 `notation.ts` | ~80% | 中文/WXF/坐标三格式双向，变着导出缺失 |
-| 结果裁决 `store.tsx` | ~75% | 将死/困毙/重复真实；长捉为粗糙启发式 |
+| 结果裁决 `store.tsx` / `rules.ts` | ~75% | 将死/困毙/120 半回合自然和/三次重复/单方长将真实；未实现不同棋规切换 |
 | 局面评估 `evaluation.ts` | ~95% | 完整、有测试 |
 | 持久化 `persistence.ts` | ~90% | sessionStorage 往返可用 |
 | XQF 解析 `xqf.ts` | ~20% | stub，无解密，真实文件不可用 |
 | 棋盘渲染 `XiangqiBoard.tsx` | ~90% | 高质量 SVG 棋盘，缺坐标轴渲染 |
-| 对弈 `BoardGame.tsx` | ~85% | 三种对局模式/时钟/悔棋可用 |
+| 对弈 `BoardGame.tsx` | ~88% | 三种对局模式/时钟/悔棋/对弈开局库可用 |
 | 棋谱栏 `XiangqiGameNotation.tsx` | ~90% | 中文记谱、变着树完整 |
 | 信息面板 `XiangqiInfoPanel.tsx` | ~95% | 象棋化彻底 |
-| 设置/棋子选择 `PiecesSelect.tsx` | ~90% | 完整，残留国象专属设置项 |
+| 设置/棋子选择 `PiecesSelect.tsx` | ~92% | 内置主题、自定义 SVG/PNG、70%–200% 缩放可用，仍有少量国象专属设置项 |
 | 引擎分析链路 | ~80% | 前端→Rust→引擎全链路贯通可用 |
 | 引擎进程管理 | ~55% | 有泄漏、孤儿进程、崩溃无恢复 |
 | 目录扫描 + 持久化索引 | ~85% | IndexedDB 索引**已实现** |
 | PGN 解析/搜索/打开 | ~80% | 真实可用 |
 | 云库 chessdb | ~80% | 链路真实，含缓存/超时/防注入 |
 | CBL 单局解析 | ~20% | 仅库级，二进制记录未解析 |
-| OBK 任意局面查询 | ~5% | **硬编码假数据**，SQLite 从未打开 |
+| 对弈开局库查询 | ~70% | 后端支持 `.obk/.xqb/.pfBook`，对弈中优先于引擎；研究/统计视图尚未接入 |
 | 残局训练 | 代码 ~80% / 对用户 0% | 组件完整但被占位页屏蔽 |
 
 ## 已完成、质量较高的部分
@@ -60,7 +60,8 @@ cn-croissant 在 [En Croissant](https://github.com/franciscoBSalgueiro/en-croiss
 `src/xiangqi/XiangqiBoard.tsx`（807 行）是**为象棋从零写的纯 SVG 棋盘**（非改造 chessground），质量高：
 
 - 交叉点棋盘、河界断线、九宫斜线、炮位/兵位星点（传统半括号画法）。
-- 红黑文字棋子、11 种内置 CSS 棋子主题 + 自定义 SVG 主题（从 appData 读取，含缺失处理与竞态防护）。
+- 红黑文字棋子、11 种内置 CSS 棋子主题 + 自定义 SVG/PNG 主题（从 appData 或用户选择目录读取，含缺失处理与竞态防护）。
+- 自定义 SVG/PNG 棋子均支持独立目录、缺失文件检查和 70%–200% 缩放；PNG 棋子默认文件名为 `rk.png`、`ra.png`、`rb.png`、`rn.png`、`rr.png`、`rc.png`、`rp.png`、`bk.png`、`ba.png`、`bb.png`、`bn.png`、`br.png`、`bc.png`、`bp.png`。
 - 最后一步高亮、可走点（吃子空心环/落点实心点）、拖拽+点选双模式、右键箭头/圈选（4 色、可删除）、引擎箭头、连续 PV 箭头（含上限与去重）。
 - 响应式良好（aspect-ratio 9/10、容器查询单位）。
 
@@ -89,12 +90,12 @@ cn-croissant 在 [En Croissant](https://github.com/franciscoBSalgueiro/en-croiss
 
 ### 5. 结果裁决（~75%）
 
-`src/xiangqi/store.tsx`：
+`src/xiangqi/store.tsx` 与 `src/xiangqi/rules.ts`：
 
 - 将死 / 困毙（象棋困毙正确判负，非和棋）。
-- 自然限着、三次重复、长将判负（统计循环段内是否每步皆将）均为真实现，有测试。
-- **长捉为粗糙启发式**：`isChasingNonKingPiece` 只看"能否吃任一非将敌子"，未判断是否捉同一子、被捉子是否有根、子力价值，可能误判胜负。
-- 自然限着阈值 `halfmove >= 60`（30 个回合）远短于通行规则，阈值可疑。
+- 120 半回合自然和、三次同局面和、单方长将判负均为真实实现，有前端测试覆盖。
+- 之前尝试加入的 AsianRule / ChineseRule / SkyRule / ComputerRule / YitianRule 切换入口已经移除；当前 GUI 不再暴露未完成的不同棋规裁决。
+- 长捉不再作为自动胜负裁决依据。后续若要实现不同棋规，应先按可靠项目或规则文本完成整体规则裁决，再开放设置入口。
 
 ### 6. 记谱与持久化（~80–95%）
 
@@ -107,9 +108,11 @@ cn-croissant 在 [En Croissant](https://github.com/franciscoBSalgueiro/en-croiss
 
 仅库级识别（库名、估算记录数），**单局走法未解析**。真实 .cbl 解压后是 CCBridge 二进制记录格式，当前代码按"找 XML 文本"处理，对二进制库无效，因此"已索引 N 局"几乎恒为 0。两种容器格式（`CCBridge` 单库 zlib / `CCBridgeLibrary` 容器）未区分，后者会解压失败降级。`engine/database` 实测有 1104 个 cbl 文件，但 `MAX_PARSE_CBL_LIBRARIES = 128` 硬截断，其余只列文件名。
 
-### 2. OBK 开局库（~5%，假数据）
+### 2. 对弈开局库与本地研究库边界
 
-**最严重的问题**：6.5MB 真实 SQLite OBK 文件**从未被打开**——全仓库无任何 SQLite/sql.js 读取代码。`initialObkMoves()` 是硬编码的 8 个着法值 + 伪造对局数（19999/999），只在初始局面注入。一旦扫到任意 obk 文件，就给初始局面叠加假对局统计，**污染本地数据库面板**，让用户误以为有真实棋谱支撑。
+Rust 后端已有 `xiangqi_opening_book.rs`，支持 `.obk`（`bhobk`）、`.xqb`（`book`）和 `.pfBook`（`pfBook`）三类 SQLite 开局库查询。人机/机机对弈中，电脑轮次会在设定最大库深度内先查开局库，返回合法着法后再决定是否需要引擎搜索。该路径已有临时 pfBook 单元测试，验证了初始局面查询和“开局库优先于引擎搜索”。
+
+仍未完成的是**本地研究/统计视图接入**：`xiangqiDatabase.ts` 目前只扫描并展示 OBK 文件数量，没有把 OBK/XQB/PFBook 候选着纳入分析页、本地棋谱统计或开局树浏览。因此“对弈用开局库”可用，但“研究用开局库数据库”仍是后续任务。
 
 ### 3. XQF 解析（~20%，stub）
 
@@ -134,7 +137,7 @@ cn-croissant 在 [En Croissant](https://github.com/franciscoBSalgueiro/en-croiss
 
 ### 1. 不参与编译的 Rust 死代码（重要）
 
-`src-tauri/src/main.rs`（1455 行）是**自包含单文件**——没有任何 `mod` 声明，也没有 `lib.rs`。这意味着以下文件**根本不参与编译**，是纯遗留：
+`src-tauri/src/main.rs` 仍承担大量象棋后端逻辑，目前只拆出了 `xiangqi_opening_book.rs` 与 `xiangqi_zobrist_table.rs` 两个正式模块。项目没有 `lib.rs`，因此以下上游文件仍基本不参与当前象棋主流程编译，属于待清理或待归档参考代码：
 
 ```
 chess.rs  game.rs  pgn.rs  opening.rs  puzzle.rs  lexer.rs
@@ -163,22 +166,20 @@ db/（整目录）  engine/（process.rs / uci.rs / types.rs，上游成熟的�
 
 按影响排序：
 
-1. **OBK 假数据注入**：扫到 obk 即给初始局面叠加伪对局数，污染统计（`xiangqiDatabase.ts` `initialObkMoves` / `buildXiangqiPositionIndex`）。
-2. **中文记谱双实现不一致**：`moveToText` 缺消歧，叠线子记谱有歧义（`xiangqi.ts:580` vs `notation.ts:90`）。
-3. **引擎进程泄漏 / 孤儿进程**：`stop_analysis` 只停不杀不移除；`kill_engines` / `abort_game` 是空桩；应用退出不清理常驻引擎，Pikafish 可能成孤儿进程。
-4. **引擎崩溃无恢复**：reader 线程在 EOF/出错时静默 break，不置 running=false、不发错误事件，前端永远停在 loading；stderr 被丢弃（`Stdio::null()`），无诊断信息。
-5. **长捉裁决可能误判胜负**（`store.tsx` `isChasingNonKingPiece` 启发式过简）。
-6. **DatabasePanel React key 冲突**：同一文件多局用 `key={game.path}`，多局会重复 key 且高亮串味（应用 `game.id`）。
-7. **CBL 元数据提取恒空**：CCBridge zlib 格式前 4 字节为 0，`readCblInitialStrings` 立即 break，作者/简介永远空白。
-8. **内置 Pikafish 选型固定取最慢变体**（sse41-popcnt），未做 CPU 特性探测选最快二进制。
-9. **引擎日志无上限累积**：每 200ms 全量 clone + 序列化 + IPC 回传，无限分析下是内存/性能隐患。
-10. **自然限着阈值偏短**（`halfmove >= 60`），应对照官方规则复核。
+1. **中文记谱双实现不一致**：`moveToText` 缺消歧，叠线子记谱有歧义（`xiangqi.ts` vs `notation.ts`）。
+2. **引擎进程泄漏 / 孤儿进程风险**：分析和对弈引擎的生命周期仍集中在 `main.rs`，退出、崩溃、切换时需要更明确的 kill / cleanup / 错误回传。
+3. **引擎崩溃恢复不足**：reader 线程在 EOF/出错时的 UI 反馈和 stderr 诊断仍需加强，避免前端永久 loading。
+4. **DatabasePanel React key 冲突**：同一文件多局用 `key={game.path}`，多局会重复 key 且高亮串味（应用 `game.id`）。
+5. **CBL 元数据提取不稳定**：CCBridge 二进制库仍未完整解析，作者/简介/单局记录可靠性不足。
+6. **内置 Pikafish 选型固定取兼容变体**，未做 CPU 特性探测选最快二进制。
+7. **引擎日志无上限累积**：每 200ms 全量 clone + 序列化 + IPC 回传，无限分析下是内存/性能隐患。
+8. **不同棋规裁决未实现**：当前只保留统一基础裁决；AsianRule / ChineseRule / SkyRule / ComputerRule / YitianRule 不应在 GUI 中出现，直到整体规则逻辑真正实现。
 
 ## 主要优化方向
 
 - **架构收束**：把 main.rs 的象棋分析后端抽成独立模块；清理（或归档说明）不参与编译的遗留 .rs；统一 white/black → red/black 术语。
 - **大文件拆分**：`XiangqiAnalysisPanel.tsx`（1876 行）拆为 context / arrows / settings / report / pv 多模块；引擎默认设置合并到单一来源。
-- **正确性**：统一中文记谱生成器；完善或明确标注长捉为实验性；为已实现但未测的 perpetualCheck/perpetualChase/checkmate/困毙 补测试。
+- **正确性**：统一中文记谱生成器；若要实现不同棋规裁决，必须以完整规则逻辑为单位实现并测试，而不是只调整长将/长捉局部参数。
 - **健壮性**：修引擎进程泄漏与崩溃恢复；引擎日志加环形缓冲上限；云库加请求去重/退避。
 - **专业化**：渲染坐标轴；全流程 i18n（含 aria-label）；清理设置页国象残留项。
 
@@ -190,10 +191,10 @@ db/（整目录）  engine/（process.rs / uci.rs / types.rs，上游成熟的�
 | 规则 | chessops | 自研象棋规则核心，正确且有测试 |
 | 分析 | UCI、多引擎、报告、日志、云分析 | 象棋本地分析全链路可用；进程管理待加固 |
 | MultiPV / 分析模式 | 支持 | 已支持五种模式 + 多候选显示 |
-| 对弈 | 人/引擎、时钟、悔棋 | 象棋化可用，需更多实战测试 |
+| 对弈 | 人/引擎、时钟、悔棋 | 象棋化可用，支持 .obk/.xqb/.pfBook 对弈开局库 |
 | 记谱 | PGN 标准 | 中文/WXF/坐标三格式，变着导出待补 |
-| 数据库 | 成熟 | 扫描 + IndexedDB 索引 + PGN 可用；CBL/OBK 专用格式未完成 |
-| repertoire | 成熟 | 占位，短期只做开局库浏览，不做布局训练 |
+| 数据库 | 成熟 | 扫描 + IndexedDB 索引 + PGN 可用；CBL/XQF/OBK 研究统计未完成 |
+| repertoire | 成熟 | 占位；短期目标是开局库/布局浏览，不做间隔重复训练 |
 | puzzle | 国际象棋题库 | 组件完整但禁用，依赖在线云库 |
 | annotation | 国际象棋 NAG | 主流程移除，待改为文字批注/标签 |
 | online accounts | Lichess / Chess.com | 禁用，待定象棋平台方向 |
@@ -207,7 +208,7 @@ db/（整目录）  engine/（process.rs / uci.rs / types.rs，上游成熟的�
 
 ### B. 下一阶段正式开发
 
-CBL/CBR 单局解析、OBK 真实 SQLite 查询（先删假数据）、象棋开局库浏览、复盘报告增强、云库稳定化、残局训练正式版、引擎进程加固、架构收束。
+CBL/CBR 单局解析、OBK/XQB/PFBook 研究视图接入、象棋开局库浏览、复盘报告增强、云库稳定化、残局训练正式版、引擎进程加固、架构收束。
 
 ### C. 暂不应开放
 

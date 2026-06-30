@@ -98,6 +98,9 @@ const CUSTOM_PNG_BOARD_LAYOUT: BoardLayout = {
   height: (9 * CUSTOM_BOARD_REFERENCE_CELL_SIZE * 100) / CUSTOM_BOARD_REFERENCE_HEIGHT,
 };
 const DRAW_BRUSH_SEQUENCE: XiangqiDrawBrush[] = ["green", "red", "blue", "yellow"];
+const CUSTOM_PIECE_SCALE_MIN = 70;
+const CUSTOM_SVG_PIECE_SCALE_MAX = 200;
+const CUSTOM_PNG_PIECE_SCALE_MAX = 200;
 const customBoardImageSizeCache = new Map<string, { width: number; height: number }>();
 const DRAW_BRUSHES: Record<
   XiangqiDrawBrush,
@@ -441,7 +444,11 @@ export function XiangqiBoard({
             }`,
             "--piece-inner-size": `${clampedPieceInnerScale}%`,
             "--piece-inner-inset": `${(100 - clampedPieceInnerScale) / 2}%`,
-            "--custom-piece-size": `${clamp(customPieceScale, 80, 120)}%`,
+            "--custom-piece-size": `${clamp(
+              customPieceScale,
+              CUSTOM_PIECE_SCALE_MIN,
+              pieceStyle === "custom-svg" ? CUSTOM_SVG_PIECE_SCALE_MAX : CUSTOM_PNG_PIECE_SCALE_MAX,
+            )}%`,
             "--grid-pad-x": `${boardLayout.padX}%`,
             "--grid-pad-y": `${boardLayout.padY}%`,
             "--grid-width": `${boardLayout.width}%`,

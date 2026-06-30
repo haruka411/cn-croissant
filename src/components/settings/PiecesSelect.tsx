@@ -49,8 +49,9 @@ import {
 } from "@/xiangqi/customPieceTheme";
 import boardClasses from "@/xiangqi/XiangqiBoard.module.css";
 
-const CUSTOM_PIECE_SCALE_MIN = 80;
-const CUSTOM_PIECE_SCALE_MAX = 120;
+const CUSTOM_PIECE_SCALE_MIN = 70;
+const CUSTOM_SVG_PIECE_SCALE_MAX = 200;
+const CUSTOM_PNG_PIECE_SCALE_MAX = 200;
 
 const pieceStyles: { value: XiangqiPieceStyle }[] = [
   { value: "classic" },
@@ -93,9 +94,11 @@ function PiecePreview({
   );
   const isCustomPiece = value === "custom-svg" || value === "custom-png";
   const showInnerRing = innerRingVisible && xiangqiPieceStyleHasInnerRing(value);
+  const customPieceScaleMax =
+    value === "custom-svg" ? CUSTOM_SVG_PIECE_SCALE_MAX : CUSTOM_PNG_PIECE_SCALE_MAX;
   const clampedCustomPieceScale = Math.max(
     CUSTOM_PIECE_SCALE_MIN,
-    Math.min(customPieceScale, CUSTOM_PIECE_SCALE_MAX),
+    Math.min(customPieceScale, customPieceScaleMax),
   );
   const scopeStyle = {
     "--piece-text-scale": clampedTextScale / 100,
@@ -185,6 +188,9 @@ export default function PiecesSelect() {
   const customFormat: CustomPieceFormat = isCustomPng ? "png" : "svg";
   const activeCustomPieceDirectory = isCustomPng ? customPngPieceDirectory : customPieceDirectory;
   const activeCustomPieceScale = isCustomPng ? customPngPieceScale : customPieceScale;
+  const activeCustomPieceScaleMax = isCustomSvg
+    ? CUSTOM_SVG_PIECE_SCALE_MAX
+    : CUSTOM_PNG_PIECE_SCALE_MAX;
   const activeCustomPieceConfirmed = isCustomPng
     ? customPngPieceThemeConfirmed
     : customPieceThemeConfirmed;
@@ -211,7 +217,7 @@ export default function PiecesSelect() {
   );
   const clampedCustomPieceScale = Math.max(
     CUSTOM_PIECE_SCALE_MIN,
-    Math.min(activeCustomPieceScale, CUSTOM_PIECE_SCALE_MAX),
+    Math.min(activeCustomPieceScale, activeCustomPieceScaleMax),
   );
 
   function setActiveCustomPieceConfirmed(value: boolean) {
@@ -435,7 +441,7 @@ export default function PiecesSelect() {
             </Text>
             <Slider
               min={CUSTOM_PIECE_SCALE_MIN}
-              max={CUSTOM_PIECE_SCALE_MAX}
+              max={activeCustomPieceScaleMax}
               step={1}
               value={clampedCustomPieceScale}
               onChange={setActiveCustomPieceScale}
